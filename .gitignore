@@ -1,0 +1,11 @@
+# local config / secrets — never commit
+.env
+
+# fork binaries the operator drops in before building the node image
+node/bitcoind
+node/bitcoin-cli
+
+# snapshots / temp
+*.tar.zst
+*.sha256
+/tmp/
