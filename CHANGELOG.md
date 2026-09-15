@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.2 — 2026-09-15
+- `datum-status` prints readable hashrate and share counts, and a calm "waiting for the node to finish syncing" line instead of the gateway's initial-sync error.
+- Fix doubled program names in the OK lines.
+- Verified end to end on a fresh DigitalOcean droplet: install, sync, own templates, shares credited on the pool.
+
 ## v1.0.1 — 2026-09-15
 - Fix: the installer aborted right after the questions (exit 141, SIGPIPE) while generating the RPC password.
 - Error messages now report the real failing line.
