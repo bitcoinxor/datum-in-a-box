@@ -327,15 +327,26 @@ ok "services"
 # a small status helper
 cat > /usr/local/bin/datum-status <<'EOF'
 #!/usr/bin/env bash
-# Shows node sync progress and gateway state.
+# Shows node sync progress and gateway state in plain words.
 c="sudo -u knots /usr/local/bin/bitcoin-cli -datadir=/var/lib/knots -conf=/var/lib/knots/bitcoin.conf"
-echo "node:     $(systemctl is-active knotsd)   gateway: $(systemctl is-active ratum-gateway)"
+echo "node:     $(systemctl is-active knotsd)    gateway: $(systemctl is-active ratum-gateway)"
+synced=0
 if info=$($c getblockchaininfo 2>/dev/null); then
-  echo "$info" | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d["verificationprogress"]*100; print("chain:    height %d  %s" % (d["blocks"], "at tip" if p>99.99 else "syncing %.2f%%" % p))'
+  line=$(echo "$info" | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d["verificationprogress"]*100; print(("chain:    height %d  at tip" % d["blocks"]) if p>99.99 else ("chain:    height %d  syncing %.2f%%" % (d["blocks"], p)))')
+  echo "$line"; case "$line" in *"at tip"*) synced=1;; esac
 else echo "chain:    node starting / not answering RPC yet"; fi
 echo "peers:    $($c getconnectioncount 2>/dev/null || echo ?)"
-echo "gateway:  $(curl -s -m 3 http://127.0.0.1:8000/stats.json | python3 -c 'import sys,json; d=json.load(sys.stdin); h=d.get("hashrate"); h=h.get("current",h) if isinstance(h,dict) else h; print("%s  accepted %s  rejected %s" % (h, d.get("shares_accepted"), d.get("shares_rejected")))' 2>/dev/null || echo "not answering yet")"
-echo "last log: $(journalctl -u ratum-gateway -n 1 --no-pager -o cat 2>/dev/null)"
+if [ "$synced" -eq 0 ]; then
+  echo "gateway:  waiting for the node to finish syncing (expected - your miners get work automatically once it is at the tip)"
+else
+  curl -s -m 3 http://127.0.0.1:8000/stats.json | python3 -c '
+import sys,json
+d=json.load(sys.stdin); h=d.get("hashrate") or {}
+hist=h.get("history") or []; hs=hist[-1][1] if hist and len(hist[-1])>1 else 0
+def cnt(x): return x.get("count",x) if isinstance(x,dict) else x
+print("gateway:  %.2f TH/s   shares accepted %s   rejected %s" % (hs/1e12, cnt(d.get("shares_accepted",0)), cnt(d.get("shares_rejected",0))))' 2>/dev/null || echo "gateway:  not answering yet"
+  echo "last log: $(journalctl -u ratum-gateway -n 1 --no-pager -o cat 2>/dev/null)"
+fi
 EOF
 chmod 755 /usr/local/bin/datum-status
 
