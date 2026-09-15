@@ -104,8 +104,7 @@ say ""
 say "${bold}Three questions${off} (the last one just needs Enter)."
 say ""
 say "1) Your payout address. Every block you help find pays this address straight from the coinbase."
-say "   ${yel}Use a wallet you hold the keys to - NOT an exchange deposit address${off} (an exchange will not credit a"
-say "   coinbase payout on this chain and you cannot recover it). Need a wallet? https://xorpool.com/wallet"
+say "   ${yel}Use a wallet you hold the keys to - NOT an exchange deposit address.${off} Need a wallet? https://xorpool.com/wallet"
 OLD_ADDR=""; OLD_NAME=""; OLD_PASS=""; OLD_POOL=""
 if [ "$UPDATE" -eq 1 ] && [ -f "$GW_CONF" ] && have python3; then
   OLD_ADDR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mining"].get("pool_address",""))' "$GW_CONF" 2>/dev/null || true)
