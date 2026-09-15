@@ -1,0 +1,14 @@
+[Unit]
+Description=ratum-gateway (DATUM, stratum 23334)
+After=network-online.target knotsd.service
+Wants=network-online.target
+
+[Service]
+User=knots
+Group=knots
+ExecStart=/usr/local/bin/ratum-gateway -c /etc/ratum/gateway.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

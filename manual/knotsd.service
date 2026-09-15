@@ -1,0 +1,15 @@
+[Unit]
+Description=Bitcoin Knots (BLAKE2b fork, pruned)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=knots
+Group=knots
+ExecStart=/usr/local/bin/bitcoind -datadir=/var/lib/knots -conf=/var/lib/knots/bitcoin.conf
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+{
+  "bitcoind": {
+    "rpcurl": "http://127.0.0.1:8332",
+    "rpcuser": "knots",
+    "rpcpassword": "the-same-password-as-in-bitcoin.conf",
+    "work_update_seconds": 40,
+    "notify_fallback": true
+  },
+  "mining": {
+    "pool_address": "bc1qYOUR-OWN-ADDRESS",
+    "coinbase_tag_primary": "YOUR NAME",
+    "coinbase_tag_secondary": "YOUR NAME"
+  },
+  "stratum": {
+    "listen_addr": "0.0.0.0",
+    "listen_port": 23334
+  },
+  "datum": {
+    "pool_host": "datum.xorpool.com",
+    "pool_port": 28915,
+    "pool_pubkey": "b83aedbba54ba2aa605c76859d97aebd16dece3284402b9fc874778a974da4acbb449f6ccda61625d700036f0487a05f5184f79a07abf2880da77352f4cc487e",
+    "pool_url": "https://xorpool.com/datum",
+    "pool_pass_full_users": false,
+    "pool_pass_workers": true,
+    "gateway_fee_bps": 0,
+    "pooled_mining_only": true
+  },
+  "api": {
+    "listen_addr": "127.0.0.1",
+    "listen_port": 8000
+  }
+}
