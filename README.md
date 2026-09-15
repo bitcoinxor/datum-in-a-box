@@ -16,8 +16,9 @@ copy buttons, is at **https://xorpool.com/datum/setup**.
 
 ## The easy way — one command
 
-[`setup-datum.sh`](setup-datum.sh) does every step below. It asks three questions (your payout
-address, a name for your blocks, and which pool endpoint to use — Enter for the default), checks the machine, installs
+[`setup-datum.sh`](setup-datum.sh) does every step below. It asks a few questions (your payout
+address, a name for your blocks, which pool endpoint to use, and whether to download the chain
+snapshot to skip the initial sync — Enter accepts the defaults), checks the machine, installs
 both programs from their official releases with checksums verified, and starts everything. It
 never deletes chain data and can be re-run to update. On a fresh Ubuntu or Debian box:
 
@@ -83,11 +84,24 @@ sudo systemctl daemon-reload && sudo systemctl enable --now knotsd
 sudo -u knots bitcoin-cli -datadir=/var/lib/knots getblockchaininfo | grep -E 'blocks|verificationprogress'
 ```
 
-**This takes a while: 1–3 days on a 2-core VPS** (it is the full Bitcoin history up to the fork,
-plus the fork blocks). One-time, unattended. Do step 4 now while it syncs — the gateway simply
-waits until the node reaches the tip. Don't want to wait? Ask in
-[Telegram](https://t.me/bitcoinxor) about a pruned chain snapshot to start from; you still
-validate every block from there on.
+**From scratch this takes 1–3 days on a 2-core VPS** (the full Bitcoin history up to the fork,
+plus the fork blocks). It runs unattended; do step 4 meanwhile. **Or skip it with the snapshot** — a
+copy of our node's verified pruned chain (~10 GB, rebuilt weekly; `latest.json` names the current
+one). You trust this copy of history up to the snapshot height, verify its checksum, and your node
+verifies every block after it — the usual bootstrap trust model. Fetch, verify, swap in, confirm:
+
+```sh
+cd /var/tmp && curl -fsS https://snapshot.xorpool.com/latest.json -o latest.json
+F=$(python3 -c 'import json;print(json.load(open("latest.json"))["file"]')
+curl -fL -C - -o $F https://snapshot.xorpool.com/$F
+echo "$(python3 -c 'import json;print(json.load(open("latest.json"))["sha256"]')  $F" | sha256sum -c   # must print: OK - stop here if it doesn't
+sudo apt -y install zstd
+sudo systemctl stop knotsd && sudo rm -rf /var/lib/knots/blocks /var/lib/knots/chainstate
+sudo tar -C /var/lib/knots --use-compress-program=unzstd -xf $F && sudo chown -R knots:knots /var/lib/knots
+sudo systemctl start knotsd && rm -f $F
+H=$(python3 -c 'import json;print(json.load(open("latest.json"))["height"]'); sleep 20
+sudo -u knots bitcoin-cli -datadir=/var/lib/knots getblockhash $H; python3 -c 'import json;print(json.load(open("latest.json"))["block_hash"]')   # the two hashes must match
+```
 
 ## 4 · Install the DATUM gateway (ratum)
 

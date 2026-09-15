@@ -22,6 +22,7 @@ POOL_HOST="datum.xorpool.com"
 POOL_PORT="28915"
 POOL_PUBKEY="b83aedbba54ba2aa605c76859d97aebd16dece3284402b9fc874778a974da4acbb449f6ccda61625d700036f0487a05f5184f79a07abf2880da77352f4cc487e"
 POOL_URL="https://xorpool.com/datum"
+SNAPSHOT_URL="https://snapshot.xorpool.com/latest.json"   # pruned chain snapshot to skip the initial sync
 PEER1="stratum.xorpool.com:18901"
 PEER2="datum.xorpool.com:8333"
 
@@ -53,6 +54,10 @@ ask() {  # ask VAR "prompt" "default"
     [ -n "$val" ] && { printf -v "$var" '%s' "$val"; return; }
     say "  (this one is required)" >&2
   done
+}
+confirm_default_yes() {  # Enter or y = yes
+  local a; printf '%s [Y/n]: ' "$1" >&2; IFS= read -r a < "$IN" || a=""
+  case "${a,,}" in n|no) return 1;; *) return 0;; esac
 }
 confirm() {  # confirm "question" -> returns 0 on y/yes
   local a; printf '%s [y/N]: ' "$1" >&2; IFS= read -r a < "$IN" || a=""
@@ -102,7 +107,7 @@ fi
 
 # ---------------------------------------------------------------- questions
 say ""
-say "${bold}Three questions${off} (the last one just needs Enter)."
+say "${bold}A few questions${off} (most just need Enter)."
 say ""
 say "1) Your payout address. Every block you help find pays this address straight from the coinbase."
 say "   ${yel}Use a wallet you hold the keys to - NOT an exchange deposit address.${off} Need a wallet? https://xorpool.com/wallet"
@@ -187,6 +192,25 @@ while :; do
   say "   ${red}Give it as host:port${off}, e.g. datum.xorpool.com:28915"
 done
 
+SNAP=0; SNAP_H=""; SNAP_HASH=""; SNAP_SHA=""; SNAP_FILE=""; SNAP_SIZE=0
+if latest=$(curl -fsS --max-time 15 "$SNAPSHOT_URL" 2>/dev/null); then
+  read -r SNAP_FILE SNAP_H SNAP_HASH SNAP_SHA SNAP_SIZE <<<"$(python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["file"],d["height"],d["block_hash"],d["sha256"],d["size_bytes"])' <<<"$latest" 2>/dev/null || true)"
+fi
+if [ -n "$SNAP_FILE" ]; then
+  have_h=0; [ -d "$NODE_DIR/chainstate" ] && have_h=$(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getblockcount 2>/dev/null || echo 0)
+  if [ "${have_h:-0}" -ge "$SNAP_H" ]; then
+    say ""; say "Your node is already past the published snapshot (height $have_h); no snapshot needed."
+  elif [ "$DISK_GB" -lt 35 ]; then
+    say ""; warn "the chain snapshot needs ~35 GB free during install (have ${DISK_GB} GB) - skipping it; the node will sync from scratch (1-3 days)"
+  else
+    say ""
+    say "4) Skip the initial sync? A snapshot of the pruned chain at height $SNAP_H ($((SNAP_SIZE/1073741824)) GB download) is available."
+    say "   With it the node starts at the tip in minutes instead of 1-3 days. You trust this copy of history up to"
+    say "   height $SNAP_H (like any bootstrap); every block after it is verified by your own node."
+    if confirm_default_yes "   Download the snapshot?"; then SNAP=1; ok "snapshot: height $SNAP_H"; else say "   ok - syncing from scratch"; fi
+  fi
+fi
+
 if [ -n "$OLD_PASS" ]; then RPC_PASS="$OLD_PASS"; else RPC_PASS="$(python3 -c 'import secrets; print(secrets.token_hex(20))')"; fi
 
 say ""
@@ -195,6 +219,7 @@ say "  Payout address   $ADDR"
 say "  Block tag        Bitcoin Xor / $NAME"
 say "  Pool             $POOL_HOST:$POOL_PORT  (1% fee, you build the templates)"
 say "  Node             $NODE_DIR  (pruned, ~14 GB, RPC local-only)"
+[ "$SNAP" -eq 1 ] && say "  Snapshot         $SNAP_FILE -> node starts at height $SNAP_H"
 [ "$NEED_SWAP" -eq 1 ] && say "  Swap             add a 2 GB /swapfile"
 say ""
 confirm "Install with these settings?" || { say "Nothing changed."; trap - EXIT; exit 0; }
@@ -204,7 +229,7 @@ say ""
 say "${bold}Installing...${off}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get -qq update
-apt-get -qq -y install curl ca-certificates python3 >/dev/null
+apt-get -qq -y install curl ca-certificates python3 zstd >/dev/null
 ok "packages"
 
 if [ "$NEED_SWAP" -eq 1 ] && [ ! -f /swapfile ]; then
@@ -355,6 +380,24 @@ systemctl enable --now ratum-gateway >/dev/null 2>&1
 sleep 4
 systemctl is-active --quiet knotsd || die "the node did not start - see: journalctl -u knotsd -n 50"
 systemctl is-active --quiet ratum-gateway || die "the gateway did not start - see: journalctl -u ratum-gateway -n 50"
+
+if [ "$SNAP" -eq 1 ]; then
+  say ""; say "${bold}Downloading the chain snapshot${off} ($((SNAP_SIZE/1073741824)) GB) - this is the long part, a few minutes on a good link..."
+  SNAP_DIR=/var/tmp/xorpool-snapshot; mkdir -p "$SNAP_DIR"
+  curl -fL --retry 5 --retry-delay 5 -C - -o "$SNAP_DIR/$SNAP_FILE" "https://snapshot.xorpool.com/$SNAP_FILE" || die "snapshot download failed - run the script again to resume it"
+  say "verifying checksum..."
+  [ "$(sha256sum "$SNAP_DIR/$SNAP_FILE" | cut -d' ' -f1)" = "$SNAP_SHA" ] || { rm -f "$SNAP_DIR/$SNAP_FILE"; die "snapshot checksum MISMATCH - not using it. Run the script again to re-download."; }
+  ok "checksum matches"
+  systemctl stop knotsd
+  rm -rf "$NODE_DIR/blocks" "$NODE_DIR/chainstate"      # only the chain data; the config and everything else stay
+  tar -C "$NODE_DIR" --use-compress-program=unzstd -xf "$SNAP_DIR/$SNAP_FILE" || die "snapshot extract failed"
+  chown -R "$SVC_USER:$SVC_USER" "$NODE_DIR/blocks" "$NODE_DIR/chainstate"
+  rm -f "$SNAP_DIR/$SNAP_FILE"
+  systemctl start knotsd
+  for i in $(seq 1 90); do got=$(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getblockhash "$SNAP_H" 2>/dev/null) && break; sleep 2; done
+  if [ "${got:-}" = "$SNAP_HASH" ]; then ok "node started from the snapshot at height $SNAP_H; block hash verified"
+  else warn "could not verify block $SNAP_H against the published hash yet (node still starting?) - check later with: datum-status"; fi
+fi
 trap - EXIT
 MYIP=$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
 
@@ -364,10 +407,13 @@ say ""
 say "  Point your ASICs at:   ${bold}stratum+tcp://${MYIP:-<this-machine-ip>}:$STRATUM_PORT${off}"
 say "                         worker:  ${bold}anything.rig1${off}   password:  ${bold}x${off}"
 say ""
-if [ "$UPDATE" -eq 0 ]; then
+if [ "$SNAP" -eq 1 ]; then
+  say "  The node started from the snapshot and is catching up the last few blocks - your ASICs get work within minutes."
+  say ""
+elif [ "$UPDATE" -eq 0 ]; then
   say "  The node is now syncing the chain from the start - ${bold}1 to 3 days${off} on a small VPS. Your ASICs will get"
   say "  work automatically the moment it reaches the tip; until then the gateway waits. Leave it running."
-  say "  (Want a chain snapshot to skip most of the wait? Ask in https://t.me/bitcoinxor)"
+  say "  (Re-run this script and answer Y to the snapshot question to skip most of the wait.)"
   say ""
 fi
 say "  The gateway listens on port $STRATUM_PORT. If this machine or your provider has a firewall, allow that port from your miners."
