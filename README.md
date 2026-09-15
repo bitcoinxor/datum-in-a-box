@@ -39,7 +39,7 @@ A small VPS or any spare Linux box. The node is pruned, so it stays small once s
 | CPU | 2 cores (more makes the first sync faster) |
 | RAM | **4 GB** recommended; 2 GB + a 2 GB swap file works once synced |
 | Disk | **40 GB SSD** (the pruned node uses ~14 GB, the rest is headroom) |
-| OS | Ubuntu 24.04 / 26.04 or Debian 12, x86-64 or arm64 |
+| OS | Ubuntu 26.04 (or 24.04) or Debian 12, x86-64 or arm64 |
 | Network | the first sync downloads the whole chain once (~750 GB), after that it is negligible |
 | Where | anywhere — your ASICs talk to *your* gateway, and the gateway's link to the pool is latency-tolerant |
 

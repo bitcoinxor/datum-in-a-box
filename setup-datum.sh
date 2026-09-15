@@ -63,7 +63,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # ---------------------------------------------------------------- preflight
 [ "$(id -u)" -eq 0 ] || die "run as root:  sudo bash $0"
 . /etc/os-release 2>/dev/null || die "cannot read /etc/os-release - this script supports Ubuntu and Debian"
-case "${ID:-}" in ubuntu|debian) ;; *) die "unsupported OS '${ID:-?}' - this script supports Ubuntu 22.04+ and Debian 12+";; esac
+case "${ID:-}" in ubuntu|debian) ;; *) die "unsupported OS '${ID:-?}' - this script supports Ubuntu 26.04 / 24.04 and Debian 12+";; esac
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64)  KNOTS_ARCH="x86_64-linux-gnu";  RATUM_ARCH="x86_64-linux-musl" ;;
