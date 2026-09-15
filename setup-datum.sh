@@ -12,7 +12,7 @@
 #  Safe to re-run: an existing install is updated in place (your chain data is kept).
 #
 #  Usage (as root):   sudo bash setup-datum.sh
-#  Read it first - it is short. Questions: https://t.me/bitcoinxor
+#  Source: https://github.com/bitcoinxor/datum-in-a-box   Questions: https://t.me/bitcoinxor
 # =====================================================================================
 set -euo pipefail
 
@@ -101,15 +101,16 @@ fi
 
 # ---------------------------------------------------------------- questions
 say ""
-say "${bold}Three questions.${off}"
+say "${bold}Three questions${off} (the last one just needs Enter)."
 say ""
 say "1) Your payout address. Every block you help find pays this address straight from the coinbase."
 say "   ${yel}Use a wallet you hold the keys to - NOT an exchange deposit address${off} (an exchange will not credit a"
 say "   coinbase payout on this chain and you cannot recover it). Need a wallet? https://xorpool.com/wallet"
-OLD_ADDR=""; OLD_NAME=""; OLD_PASS=""
+OLD_ADDR=""; OLD_NAME=""; OLD_PASS=""; OLD_POOL=""
 if [ "$UPDATE" -eq 1 ] && [ -f "$GW_CONF" ] && have python3; then
   OLD_ADDR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mining"].get("pool_address",""))' "$GW_CONF" 2>/dev/null || true)
   OLD_NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mining"].get("coinbase_tag_secondary",""))' "$GW_CONF" 2>/dev/null || true)
+  OLD_POOL=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["datum"]; print("%s:%s" % (d.get("pool_host",""), d.get("pool_port","")))' "$GW_CONF" 2>/dev/null || true)
 fi
 if [ -f "$NODE_CONF" ]; then OLD_PASS=$(sed -n 's/^rpcpassword=//p' "$NODE_CONF" | head -1); fi
 
@@ -174,32 +175,26 @@ while :; do
 done
 
 say ""
-say "3) Where your ASICs are. Only they should be able to reach the gateway (port $STRATUM_PORT)."
-LAN_GUESS=$(ip -o -4 route show default 2>/dev/null | awk '{print $5}' | head -1 | xargs -r -I{} ip -o -4 addr show dev {} 2>/dev/null | awk '{print $4}' | head -1 | python3 -c 'import sys,ipaddress; s=sys.stdin.read().strip(); print(ipaddress.ip_network(s,strict=False)) if s else print("")' 2>/dev/null || true)
-say "   Give a network in CIDR form (e.g. 192.168.1.0/24), a single IP, or 'any' to allow the whole internet (not recommended)."
+say "3) Which pool endpoint to send shares to. Press Enter for the default. If this machine is in Asia or Europe you can use"
+say "   hk.datum.xorpool.com:28915 or eu.datum.xorpool.com:28915 instead - same pool, same payout, just closer."
 while :; do
-  ask MINERS "   Miner network" "${LAN_GUESS:-192.168.0.0/16}"
-  MINERS="${MINERS//[[:space:]]/}"
-  if [ "${MINERS,,}" = "any" ]; then
-    warn "port $STRATUM_PORT will be open to everyone; anyone who finds it can mine to YOUR address (harmless) or hammer it (annoying)"
-    MINERS="any"; break
+  ask POOL "   DATUM pool (host:port)" "${OLD_POOL:-$POOL_HOST:$POOL_PORT}"
+  POOL="${POOL//[[:space:]]/}"; POOL="${POOL#*://}"
+  case "$POOL" in *:*) H="${POOL%%:*}"; P="${POOL##*:}";; *) H="$POOL"; P="$POOL_PORT";; esac
+  if printf '%s' "$H" | LC_ALL=C grep -qE '^[A-Za-z0-9.-]+$' && printf '%s' "$P" | grep -qE '^[0-9]{1,5}$' && [ "$P" -ge 1 ] && [ "$P" -le 65535 ]; then
+    POOL_HOST="$H"; POOL_PORT="$P"; ok "pool: $POOL_HOST:$POOL_PORT"; break
   fi
-  if python3 -c 'import sys,ipaddress; ipaddress.ip_network(sys.argv[1],strict=False)' "$MINERS" 2>/dev/null; then ok "miners: $MINERS"; break; fi
-  say "   ${red}Not a valid network or IP.${off} Example: 192.168.1.0/24"
+  say "   ${red}Give it as host:port${off}, e.g. datum.xorpool.com:28915"
 done
 
 if [ -n "$OLD_PASS" ]; then RPC_PASS="$OLD_PASS"; else RPC_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40)"; fi
-SSH_PORTS=$(ss -tlnp 2>/dev/null | awk '/sshd/ {sub(/.*:/,"",$4); print $4}' | sort -u | tr '\n' ' ')
-SSH_PORTS="${SSH_PORTS:-22}"
 
 say ""
 say "${bold}Summary${off}"
 say "  Payout address   $ADDR"
 say "  Block tag        Bitcoin Xor / $NAME"
-say "  Miners allowed   $MINERS  -> port $STRATUM_PORT"
 say "  Pool             $POOL_HOST:$POOL_PORT  (1% fee, you build the templates)"
 say "  Node             $NODE_DIR  (pruned, ~14 GB, RPC local-only)"
-say "  Firewall         ufw: deny in by default, allow ssh (${SSH_PORTS}) + $STRATUM_PORT from miners"
 [ "$NEED_SWAP" -eq 1 ] && say "  Swap             add a 2 GB /swapfile"
 say ""
 confirm "Install with these settings?" || { say "Nothing changed."; trap - EXIT; exit 0; }
@@ -209,7 +204,7 @@ say ""
 say "${bold}Installing...${off}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get -qq update
-apt-get -qq -y install curl ufw ca-certificates python3 >/dev/null
+apt-get -qq -y install curl ca-certificates python3 >/dev/null
 ok "packages"
 
 if [ "$NEED_SWAP" -eq 1 ] && [ ! -f /swapfile ]; then
@@ -329,13 +324,6 @@ EOF
 systemctl daemon-reload
 ok "services"
 
-# firewall: allow ssh FIRST, then default-deny, then the miners, then enable
-for p in $SSH_PORTS; do ufw allow "$p/tcp" >/dev/null; done
-ufw default deny incoming >/dev/null; ufw default allow outgoing >/dev/null
-if [ "$MINERS" = "any" ]; then ufw allow "$STRATUM_PORT/tcp" >/dev/null; else ufw allow from "$MINERS" to any port "$STRATUM_PORT" proto tcp >/dev/null; fi
-ufw --force enable >/dev/null
-ok "firewall (ssh ${SSH_PORTS}, $STRATUM_PORT from $MINERS)"
-
 # a small status helper
 cat > /usr/local/bin/datum-status <<'EOF'
 #!/usr/bin/env bash
@@ -371,6 +359,8 @@ if [ "$UPDATE" -eq 0 ]; then
   say "  (Want a chain snapshot to skip most of the wait? Ask in https://t.me/bitcoinxor)"
   say ""
 fi
+say "  The gateway listens on port $STRATUM_PORT. If this machine or your provider has a firewall, allow that port from your miners."
+say ""
 say "  Check on it any time:  ${bold}datum-status${off}"
 say "  Your stats once shares flow:  $POOL_URL/miner/$ADDR"
 say "  Logs:  journalctl -u knotsd -f     journalctl -u ratum-gateway -f"

@@ -17,13 +17,12 @@ copy buttons, is at **https://xorpool.com/datum/setup**.
 ## The easy way — one command
 
 [`setup-datum.sh`](setup-datum.sh) does every step below. It asks three questions (your payout
-address, a name for your blocks, which network your ASICs are on), checks the machine, installs
+address, a name for your blocks, and which pool endpoint to use — Enter for the default), checks the machine, installs
 both programs from their official releases with checksums verified, and starts everything. It
 never deletes chain data and can be re-run to update. On a fresh Ubuntu or Debian box:
 
 ```sh
 curl -fsSLo setup-datum.sh https://xorpool.com/datum/setup.sh
-less setup-datum.sh          # read it first - it is short and commented (q to quit)
 sudo bash setup-datum.sh
 ```
 
@@ -43,20 +42,16 @@ A small VPS or any spare Linux box. The node is pruned, so it stays small once s
 | Network | the first sync downloads the whole chain once (~750 GB), after that it is negligible |
 | Where | anywhere — your ASICs talk to *your* gateway, and the gateway's link to the pool is latency-tolerant |
 
-Updates, a service user, and a firewall that only lets your miners in. Edit the `192.168.0.0/16`
-line to the network your ASICs are on (or their public IP):
+Updates, and a service user for the two programs to run as:
 
 ```sh
-sudo apt update && sudo apt -y upgrade && sudo apt -y install curl ufw
+sudo apt update && sudo apt -y upgrade && sudo apt -y install curl
 sudo useradd -r -m -d /var/lib/knots -s /usr/sbin/nologin knots
-sudo ufw allow 22/tcp
-sudo ufw default deny incoming && sudo ufw default allow outgoing
-sudo ufw allow from 192.168.0.0/16 to any port 23334 proto tcp   # <- the network your ASICs are on
-sudo ufw --force enable
 ```
 
-Only port 23334 (your gateway) needs to be reachable, and only from your miners. The firewall is
-not active until the last line, and SSH is allowed before that. Never expose the node's RPC port.
+This guide doesn't set up a firewall. If your machine or provider has one, the only port that needs
+to be reachable is 23334 (the gateway), and only from your miners. The node's RPC only listens on the
+machine itself.
 
 ## 2 · Install Bitcoin Knots (BLAKE2b fork)
 
@@ -186,8 +181,8 @@ your first share your address appears at `https://xorpool.com/datum/miner/<your 
   exactly this.
 - **RPC timeouts in the gateway log on a small VPS** — usually the node validating a fresh block;
   harmless if occasional. If constant, give the node more RAM/`dbcache` or fewer `maxconnections`.
-- **ASICs can't connect** — the firewall rule in step 1 must match the network the miners are on;
-  test with `nc -vz YOUR-GATEWAY-IP 23334` from that network.
+- **ASICs can't connect** — something between them and the gateway blocks port 23334 (a firewall on
+  the machine or at the provider). Test with `nc -vz YOUR-GATEWAY-IP 23334` from the miners' network.
 
 Still stuck? Ask in [Telegram](https://t.me/bitcoinxor).
 
