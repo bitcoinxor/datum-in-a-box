@@ -39,7 +39,8 @@ say()  { printf '%s\n' "$*"; }
 ok()   { printf '%s  %s%s\n' "${grn}OK${off}" "$*" ""; }
 warn() { printf '%sWARNING%s  %s\n' "$yel" "$off" "$*"; }
 die()  { printf '\n%sERROR%s  %s\n' "$red" "$off" "$*" >&2; exit 1; }
-trap 'rc=$?; if [ $rc -ne 0 ]; then printf "\n%sThe setup stopped at line %s (exit %s).%s Nothing has been deleted; fix the cause and run the script again.\n" "$red" "$LINENO" "$rc" "$off" >&2; fi' EXIT
+ERR_LINE=0; trap 'ERR_LINE=$LINENO' ERR
+trap 'rc=$?; if [ $rc -ne 0 ]; then printf "\n%sThe setup stopped at line %s (exit %s).%s Nothing has been deleted; fix the cause and run the script again.\n" "$red" "$ERR_LINE" "$rc" "$off" >&2; fi' EXIT
 
 # Questions come from the terminal even when the script is piped in.
 if [ -r /dev/tty ]; then IN=/dev/tty; else IN=/dev/stdin; fi
@@ -186,7 +187,7 @@ while :; do
   say "   ${red}Give it as host:port${off}, e.g. datum.xorpool.com:28915"
 done
 
-if [ -n "$OLD_PASS" ]; then RPC_PASS="$OLD_PASS"; else RPC_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40)"; fi
+if [ -n "$OLD_PASS" ]; then RPC_PASS="$OLD_PASS"; else RPC_PASS="$(python3 -c 'import secrets; print(secrets.token_hex(20))')"; fi
 
 say ""
 say "${bold}Summary${off}"
