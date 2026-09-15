@@ -44,23 +44,24 @@ ERR_LINE=0; trap 'ERR_LINE=$LINENO' ERR
 trap 'rc=$?; if [ $rc -ne 0 ]; then printf "\n%sThe setup stopped at line %s (exit %s).%s Nothing has been deleted; fix the cause and run the script again.\n" "$red" "$ERR_LINE" "$rc" "$off" >&2; fi' EXIT
 
 # Questions come from the terminal even when the script is piped in.
-if [ -r /dev/tty ]; then IN=/dev/tty; else IN=/dev/stdin; fi
+if ( : < /dev/tty ) 2>/dev/null; then IN=/dev/tty; else IN=""; fi   # a tty we can actually open; otherwise answers come from stdin
+readline() { if [ -n "$IN" ]; then IFS= read -r "$1" < "$IN"; else IFS= read -r "$1"; fi; }   # never reopen a redirected stdin: that restarts it from line 1
 ask() {  # ask VAR "prompt" "default"
   local var="$1" prompt="$2" def="${3:-}" val
   while :; do
     if [ -n "$def" ]; then printf '%s [%s]: ' "$prompt" "$def" >&2; else printf '%s: ' "$prompt" >&2; fi
-    IFS= read -r val < "$IN" || die "no input"
+    readline val || die "no input"
     val="${val:-$def}"
     [ -n "$val" ] && { printf -v "$var" '%s' "$val"; return; }
     say "  (this one is required)" >&2
   done
 }
 confirm_default_yes() {  # Enter or y = yes
-  local a; printf '%s [Y/n]: ' "$1" >&2; IFS= read -r a < "$IN" || a=""
+  local a; printf '%s [Y/n]: ' "$1" >&2; readline a || a=""
   case "${a,,}" in n|no) return 1;; *) return 0;; esac
 }
 confirm() {  # confirm "question" -> returns 0 on y/yes
-  local a; printf '%s [y/N]: ' "$1" >&2; IFS= read -r a < "$IN" || a=""
+  local a; printf '%s [y/N]: ' "$1" >&2; readline a || a=""
   case "${a,,}" in y|yes) return 0;; *) return 1;; esac
 }
 
@@ -187,7 +188,8 @@ while :; do
   POOL="${POOL//[[:space:]]/}"; POOL="${POOL#*://}"
   case "$POOL" in *:*) H="${POOL%%:*}"; P="${POOL##*:}";; *) H="$POOL"; P="$POOL_PORT";; esac
   if printf '%s' "$H" | LC_ALL=C grep -qE '^[A-Za-z0-9.-]+$' && printf '%s' "$P" | grep -qE '^[0-9]{1,5}$' && [ "$P" -ge 1 ] && [ "$P" -le 65535 ]; then
-    POOL_HOST="$H"; POOL_PORT="$P"; ok "pool: $POOL_HOST:$POOL_PORT"; break
+    if getent hosts "$H" >/dev/null 2>&1; then POOL_HOST="$H"; POOL_PORT="$P"; ok "pool: $POOL_HOST:$POOL_PORT"; break; fi
+    say "   ${red}Cannot resolve host '$H'${off} - check the spelling."; continue
   fi
   say "   ${red}Give it as host:port${off}, e.g. datum.xorpool.com:28915"
 done
@@ -384,7 +386,7 @@ systemctl is-active --quiet ratum-gateway || die "the gateway did not start - se
 if [ "$SNAP" -eq 1 ]; then
   say ""; say "${bold}Downloading the chain snapshot${off} ($((SNAP_SIZE/1073741824)) GB) - this is the long part, a few minutes on a good link..."
   SNAP_DIR=/var/tmp/xorpool-snapshot; mkdir -p "$SNAP_DIR"
-  curl -fL --retry 5 --retry-delay 5 -C - -o "$SNAP_DIR/$SNAP_FILE" "https://snapshot.xorpool.com/$SNAP_FILE" || die "snapshot download failed - run the script again to resume it"
+  curl -fL -# --retry 5 --retry-delay 5 -C - -o "$SNAP_DIR/$SNAP_FILE" "https://snapshot.xorpool.com/$SNAP_FILE" || die "snapshot download failed - run the script again to resume it"
   say "verifying checksum..."
   [ "$(sha256sum "$SNAP_DIR/$SNAP_FILE" | cut -d' ' -f1)" = "$SNAP_SHA" ] || { rm -f "$SNAP_DIR/$SNAP_FILE"; die "snapshot checksum MISMATCH - not using it. Run the script again to re-download."; }
   ok "checksum matches"

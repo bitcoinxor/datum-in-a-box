@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.0 — 2026-09-15
+- Chain snapshot: the installer offers to download a pruned-chain snapshot (~12 GB, from snapshot.xorpool.com) so the node starts at the tip in minutes instead of syncing for days. It verifies the sha256 before use, swaps only blocks/ and chainstate/, and checks the block hash at the snapshot height against the published one. Manual steps for the same in the README.
+- The snapshot is rebuilt weekly by `snapshot-make.sh` (included) and described by `latest.json`.
+- Pool host must resolve in DNS; answers can be piped on stdin; progress bar on the download.
+
 ## v1.0.2 — 2026-09-15
 - `datum-status` prints readable hashrate and share counts, and a calm "waiting for the node to finish syncing" line instead of the gateway's initial-sync error.
 - Fix doubled program names in the OK lines.
