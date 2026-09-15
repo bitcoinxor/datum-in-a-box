@@ -22,7 +22,7 @@ both programs from their official releases with checksums verified, and starts e
 never deletes chain data and can be re-run to update. On a fresh Ubuntu or Debian box:
 
 ```sh
-curl -fsSLo setup-datum.sh https://xorpool.com/datum/setup.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.0.0/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -31,14 +31,14 @@ the same thing.
 
 ## 1 · Get a machine
 
-A small VPS or any spare Linux box. The node is pruned, so it stays small once synced.
+A spare Linux box or a small VPS — anything that stays on. The node is pruned, so it stays small once synced.
 
 | | |
 |---|---|
 | CPU | 2 cores (more makes the first sync faster) |
 | RAM | **4 GB** recommended; 2 GB + a 2 GB swap file works once synced |
 | Disk | **40 GB SSD** (the pruned node uses ~14 GB, the rest is headroom) |
-| OS | Ubuntu 26.04 (or 24.04) or Debian 12, x86-64 or arm64 |
+| OS | any current Ubuntu or Debian (Ubuntu 26.04 if you're installing fresh), x86-64 or arm64 |
 | Network | the first sync downloads the whole chain once (~750 GB), after that it is negligible |
 | Where | anywhere — your ASICs talk to *your* gateway, and the gateway's link to the pool is latency-tolerant |
 
