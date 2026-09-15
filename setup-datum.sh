@@ -230,7 +230,7 @@ else
   sha256sum --ignore-missing --quiet -c SHA256SUMS || die "checksum MISMATCH on $KTAR - not installing it"
   tar xzf "$KTAR"
   install -m 755 "bitcoin-$KNOTS_VER/bin/bitcoind" "bitcoin-$KNOTS_VER/bin/bitcoin-cli" /usr/local/bin/
-  ok "Bitcoin Knots $(/usr/local/bin/bitcoind --version | head -1)"
+  ok "$(/usr/local/bin/bitcoind --version | head -1)"
 fi
 
 RURL="https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
@@ -246,7 +246,7 @@ else
   tar xzf "$RTAR"
   BIN=$(find . -type f -name ratum-gateway | head -1); [ -n "$BIN" ] || die "ratum-gateway binary not found in the archive"
   install -m 755 "$BIN" /usr/local/bin/ratum-gateway
-  ok "ratum-gateway $(/usr/local/bin/ratum-gateway --version 2>&1 | head -1)"
+  ok "$(/usr/local/bin/ratum-gateway --version 2>&1 | head -1)"
 fi
 cd /
 
