@@ -6,6 +6,7 @@
 #  YOUR OWN block templates:
 #     * Bitcoin Knots (BLAKE2b fork) v29.4.1 - pruned full node, RPC local-only
 #     * ratum-gateway 0.1.28            - DATUM gateway your ASICs connect to on :23334
+#     * Xor Desk (optional)             - a local web dashboard for this machine, sends nothing anywhere
 #  and points the gateway at the Bitcoin Xor DATUM pool for the payout split (1% fee).
 #
 #  It asks a few questions, checks the machine, and never deletes a node's data.
@@ -16,6 +17,7 @@
 # =====================================================================================
 set -euo pipefail
 
+SETUP_VERSION="v1.2.0"
 KNOTS_VER="29.4.1.knots20260508"
 RATUM_VER="0.1.28"
 POOL_HOST="datum.xorpool.com"
@@ -213,6 +215,22 @@ if [ -n "$SNAP_FILE" ]; then
   fi
 fi
 
+DESK=0; DESK_LISTEN="127.0.0.1"
+OLD_DESK=0; [ -f /etc/xordesk.json ] && OLD_DESK=1
+say ""
+say "5) Xor Desk: a small web dashboard that runs on this machine - node sync, gateway, rigs, settings, one-click"
+say "   update/snapshot/restart, logs. It binds to this machine only and sends nothing anywhere."
+if [ "$OLD_DESK" -eq 1 ]; then say "   (already installed - it will be updated)"; fi
+if confirm_default_yes "   Install Xor Desk?"; then
+  DESK=1
+  # a private (RFC1918) address means this box is on a LAN behind NAT: offer LAN access; a public IP stays localhost-only
+  MYIP4=$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+  if printf '%s' "$MYIP4" | grep -qE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'; then
+    if confirm_default_yes "   This machine has a LAN address ($MYIP4). Make Xor Desk reachable from other devices on your LAN?"; then DESK_LISTEN="0.0.0.0"; fi
+  fi
+  ok "Xor Desk: yes ($( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo "LAN" || echo "this machine only" ))"
+else say "   ok - skipping Xor Desk (re-run the script any time to add it)"; fi
+
 if [ -n "$OLD_PASS" ]; then RPC_PASS="$OLD_PASS"; else RPC_PASS="$(python3 -c 'import secrets; print(secrets.token_hex(20))')"; fi
 
 say ""
@@ -222,6 +240,7 @@ say "  Block tag        Bitcoin Xor / $NAME"
 say "  Pool             $POOL_HOST:$POOL_PORT  (1% fee, you build the templates)"
 say "  Node             $NODE_DIR  (pruned, ~14 GB, RPC local-only)"
 [ "$SNAP" -eq 1 ] && say "  Snapshot         $SNAP_FILE -> node starts at height $SNAP_H"
+[ "$DESK" -eq 1 ] && say "  Xor Desk         http://$( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo "${MYIP4:-this-machine}" || echo 127.0.0.1 ):8090  (password shown at the end)"
 [ "$NEED_SWAP" -eq 1 ] && say "  Swap             add a 2 GB /swapfile"
 say ""
 confirm "Install with these settings?" || { say "Nothing changed."; trap - EXIT; exit 0; }
@@ -300,16 +319,20 @@ chown "$SVC_USER:$SVC_USER" "$NODE_CONF"; chmod 600 "$NODE_CONF"
 ok "node config $NODE_CONF"
 
 # gateway config - written with python so the name is JSON-escaped correctly
-python3 - "$GW_CONF" "$RPC_PASS" "$ADDR" "$NAME" <<PY
+GW_API_PASS=$(python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1]))["api"].get("admin_password",""))
+except Exception: print("")' "$GW_CONF" 2>/dev/null)
+[ -n "$GW_API_PASS" ] || GW_API_PASS="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+python3 - "$GW_CONF" "$RPC_PASS" "$ADDR" "$NAME" "$GW_API_PASS" <<PY
 import json,sys
-p,pw,addr,name=sys.argv[1:5]
+p,pw,addr,name,apipw=sys.argv[1:6]
 cfg={
  "bitcoind":{"rpcurl":"http://127.0.0.1:8332","rpcuser":"knots","rpcpassword":pw,"work_update_seconds":40,"notify_fallback":True},
  "mining":{"pool_address":addr,"coinbase_tag_primary":name,"coinbase_tag_secondary":name},
  "stratum":{"listen_addr":"0.0.0.0","listen_port":$STRATUM_PORT},
  "datum":{"pool_host":"$POOL_HOST","pool_port":$POOL_PORT,"pool_pubkey":"$POOL_PUBKEY","pool_url":"$POOL_URL",
           "pool_pass_full_users":False,"pool_pass_workers":True,"gateway_fee_bps":0,"pooled_mining_only":True},
- "api":{"listen_addr":"127.0.0.1","listen_port":8000}}
+ "api":{"listen_addr":"127.0.0.1","listen_port":8000,"admin_password":apipw}}
 json.dump(cfg,open(p,"w"),indent=2); open(p,"a").write("\n")
 PY
 chown -R "$SVC_USER:$SVC_USER" "$GW_DIR"; chmod 640 "$GW_CONF"
@@ -350,6 +373,30 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 ok "services"
+
+# Xor Desk (optional): fetch the app from the same release as this script, write its config, run it as a service
+DESK_PASS=""
+if [ "$DESK" -eq 1 ]; then
+  mkdir -p /opt/xordesk /var/log/xordesk
+  curl -fsSLo /opt/xordesk/xordesk.py "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.py" || die "could not download Xor Desk"
+  curl -fsSLo /etc/systemd/system/xordesk.service "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.service" || die "could not download the Xor Desk service file"
+  python3 -m py_compile /opt/xordesk/xordesk.py || die "Xor Desk download is not valid python"
+  OLD_HASH=""; OLD_SALT=""
+  if [ -f /etc/xordesk.json ]; then
+    OLD_HASH=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("password_sha256",""))' /etc/xordesk.json 2>/dev/null)
+    OLD_SALT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("salt",""))' /etc/xordesk.json 2>/dev/null)
+  fi
+  if [ -n "$OLD_HASH" ]; then SALT="$OLD_SALT"; HASH="$OLD_HASH"
+  else DESK_PASS=$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))'); SALT=$(python3 -c 'import secrets; print(secrets.token_hex(8))'); HASH=$(printf '%s%s' "$SALT" "$DESK_PASS" | sha256sum | cut -d' ' -f1); fi
+  python3 - /etc/xordesk.json "$DESK_LISTEN" "$SALT" "$HASH" "$SETUP_VERSION" "$ADDR" "$NAME" "$POOL_HOST:$POOL_PORT" <<PY
+import json,sys
+p,listen,salt,h,tag,addr,name,pool=sys.argv[1:9]
+json.dump({"port":8090,"listen":listen,"salt":salt,"password_sha256":h,"installer_tag":tag,"address":addr,"name":name,"pool":pool},open(p,"w"),indent=2)
+PY
+  chmod 600 /etc/xordesk.json
+  systemctl daemon-reload; systemctl enable --now xordesk >/dev/null 2>&1; systemctl restart xordesk
+  ok "Xor Desk"
+fi
 
 # a small status helper
 cat > /usr/local/bin/datum-status <<'EOF'
@@ -420,6 +467,12 @@ elif [ "$UPDATE" -eq 0 ]; then
 fi
 say "  The gateway listens on port $STRATUM_PORT. If this machine or your provider has a firewall, allow that port from your miners."
 say ""
+if [ "$DESK" -eq 1 ]; then
+  if [ "$DESK_LISTEN" = "0.0.0.0" ]; then say "  Xor Desk (from any device on your LAN):  ${bold}http://${MYIP4:-this-machine}:8090${off}"
+  else say "  Xor Desk (this machine only; from elsewhere open an SSH tunnel first:  ssh -L 8090:127.0.0.1:8090 you@this-machine):"; say "                         ${bold}http://127.0.0.1:8090${off}"; fi
+  if [ -n "$DESK_PASS" ]; then say "  Xor Desk password:     ${bold}$DESK_PASS${off}   (shown once - write it down; re-run the script to keep it, or delete /etc/xordesk.json to get a new one)"; fi
+  say ""
+fi
 say "  Check on it any time:  ${bold}datum-status${off}"
 say "  Your stats once shares flow:  $POOL_URL/miner/$ADDR"
 say "  Logs:  journalctl -u knotsd -f     journalctl -u ratum-gateway -f"

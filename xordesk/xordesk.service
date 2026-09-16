@@ -1,0 +1,14 @@
+[Unit]
+Description=Xor Desk - local dashboard for this DATUM mining box
+After=network-online.target knotsd.service ratum-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/xordesk/xordesk.py
+Restart=on-failure
+RestartSec=5
+# runs as root: it restarts services, edits /etc/ratum/gateway.json and runs the installer for updates
+
+[Install]
+WantedBy=multi-user.target

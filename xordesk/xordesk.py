@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""Xor Desk - a local dashboard for a DATUM mining box (Knots node + ratum-gateway).
+
+Runs ON the mining machine, binds to localhost (or the LAN if you ask), sends nothing anywhere.
+Shows node sync, gateway state and rigs; edits the gateway's payout address / block name / pool
+endpoint; runs update, snapshot, restart; shows logs. Python 3 standard library only.
+
+Config: /etc/xordesk.json   {"port":8090,"listen":"127.0.0.1","salt":..,"password_sha256":..,
+                             "installer_tag":"v1.2.0","address":..,"name":..,"pool":"host:port"}
+Node:   reads rpc login from the node's bitcoin.conf.   Gateway: /etc/ratum/gateway.json + its stats API.
+"""
+import json, os, re, sys, time, hmac, hashlib, secrets, subprocess, urllib.request, urllib.parse, html, base64, threading
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+CONF = "/etc/xordesk.json"
+NODE_DIR = "/var/lib/knots"
+GW_CONF = "/etc/ratum/gateway.json"
+ACTION_LOG = "/var/log/xordesk/action.log"
+REPO = "bitcoinxor/datum-in-a-box"
+VERSION = "0.1.0"
+
+def load_conf():
+    try: return json.load(open(CONF))
+    except Exception: return {}
+CFG = load_conf()
+SESSION_SECRET = secrets.token_bytes(32)
+FAILS = {}   # ip -> [count, first_ts]
+
+def esc(s): return html.escape(str(s if s is not None else ""))
+def sh(*args, timeout=20):
+    try: return subprocess.run(list(args), capture_output=True, text=True, timeout=timeout).stdout
+    except Exception as e: return ""
+def unit_active(u): return sh("systemctl", "is-active", u).strip() or "unknown"
+
+# ------------------------------------------------------------------ node
+def node_rpc(method, params=None):
+    conf = {}
+    try:
+        for line in open(os.path.join(NODE_DIR, "bitcoin.conf")):
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1); conf[k.strip()] = v.split("#")[0].strip()
+    except OSError: return None
+    url = "http://127.0.0.1:%s" % conf.get("rpcport", "8332")
+    auth = base64.b64encode(("%s:%s" % (conf.get("rpcuser", ""), conf.get("rpcpassword", ""))).encode()).decode()
+    req = urllib.request.Request(url, data=json.dumps({"jsonrpc": "1.0", "id": "xd", "method": method, "params": params or []}).encode(),
+                                 headers={"Authorization": "Basic " + auth, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r: return json.load(r).get("result")
+    except Exception: return None
+
+def node_status():
+    st = {"service": unit_active("knotsd"), "rpc": False}
+    info = node_rpc("getblockchaininfo")
+    if info:
+        st.update(rpc=True, height=info.get("blocks"), headers=info.get("headers"), progress=round(info.get("verificationprogress", 0) * 100, 2),
+                  ibd=info.get("initialblockdownload"), pruned=info.get("pruned"), size_gb=round(info.get("size_on_disk", 0) / 1e9, 1))
+        st["at_tip"] = (not st["ibd"]) and st["progress"] >= 99.99
+        st["peers"] = node_rpc("getconnectioncount")
+        ni = node_rpc("getnetworkinfo") or {}; st["version"] = ni.get("subversion", "").strip("/")
+    return st
+
+# ------------------------------------------------------------------ gateway
+def gw_conf():
+    try: return json.load(open(GW_CONF))
+    except Exception: return {}
+def gw_status():
+    g = gw_conf(); api = g.get("api", {}); st = {"service": unit_active("ratum-gateway"), "api": False}
+    st["pool"] = "%s:%s" % (g.get("datum", {}).get("pool_host", ""), g.get("datum", {}).get("pool_port", ""))
+    st["address"] = g.get("mining", {}).get("pool_address", ""); st["name"] = g.get("mining", {}).get("coinbase_tag_secondary", "")
+    st["stratum_port"] = g.get("stratum", {}).get("listen_port", 23334)
+    url = "http://%s:%s/stats.json" % (api.get("listen_addr", "127.0.0.1"), api.get("listen_port", 8000))
+    req = urllib.request.Request(url)
+    if api.get("admin_password"):
+        req.add_header("Authorization", "Basic " + base64.b64encode(("admin:%s" % api["admin_password"]).encode()).decode())
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r: d = json.load(r)
+    except Exception: return st
+    st["api"] = True; st["version"] = d.get("version"); st["uptime"] = d.get("uptime")
+    hist = (d.get("hashrate") or {}).get("history") or []
+    pts = [p[1] for p in hist[-5:] if len(p) > 1 and p[1]]           # average the last non-empty minutes
+    st["hashrate_ths"] = round((sum(pts) / len(pts)) / 1e12, 3) if pts else 0.0
+    acc = d.get("shares_accepted") or {}; rej = d.get("shares_rejected") or {}
+    st["accepted"] = acc.get("count", acc) if isinstance(acc, dict) else acc
+    st["rejected"] = rej.get("count", rej) if isinstance(rej, dict) else rej
+    cl = d.get("clients") or []
+    if isinstance(cl, dict): cl = list(cl.values())
+    st["rigs"] = []
+    for c in cl:
+        st["rigs"].append({"worker": (c.get("username") or c.get("auth_username") or "?"), "host": str(c.get("remote_host") or c.get("host") or "").split(":")[0],
+                           "hashrate_ths": round((c.get("hashrate_hs") or c.get("hashrate") or 0) / 1e12, 3) if isinstance(c.get("hashrate_hs") or c.get("hashrate") or 0, (int, float)) else 0,
+                           "accepted": c.get("accepted", c.get("shares_accepted", "")), "rejected": c.get("rejected", c.get("shares_rejected", "")),
+                           "agent": c.get("user_agent", c.get("agent", ""))})
+    st["stratum"] = d.get("stratum") if isinstance(d.get("stratum"), dict) else {}
+    return st
+
+def snapshot_info():
+    try:
+        with urllib.request.urlopen("https://snapshot.xorpool.com/latest.json", timeout=8) as r: return json.load(r)
+    except Exception: return None
+
+def latest_release():
+    try:
+        req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % REPO, headers={"Accept": "application/vnd.github+json", "User-Agent": "xordesk"})
+        with urllib.request.urlopen(req, timeout=8) as r: return json.load(r).get("tag_name")
+    except Exception: return None
+
+def pool_earnings(pool_host, address):
+    """Pull (never push) this address's public stats from the pool it is pointed at, if the pool has an API we know."""
+    if not address or not pool_host: return None
+    if pool_host.endswith("xorpool.com"):
+        try:
+            with urllib.request.urlopen("https://xorpool.com/api/miner/%s" % urllib.parse.quote(address), timeout=8) as r: d = json.load(r)
+            d["_page"] = "https://xorpool.com/datum/miner/" + address; return d
+        except Exception: return {"_page": "https://xorpool.com/datum/miner/" + address}
+    return None
+
+# ------------------------------------------------------------------ actions (run detached; one at a time)
+def action_running(): return unit_active("xordesk-action") in ("active", "activating")
+def action_log(n=60):
+    try: return "".join(open(ACTION_LOG, errors="replace").readlines()[-n:])
+    except OSError: return ""
+def run_action(name, script):
+    if action_running(): return False
+    os.makedirs(os.path.dirname(ACTION_LOG), exist_ok=True)
+    with open(ACTION_LOG, "w") as f: f.write("== %s  %s\n" % (name, time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())))
+    sh("systemctl", "reset-failed", "xordesk-action")
+    subprocess.run(["systemd-run", "--unit", "xordesk-action", "--collect", "-p", "StandardOutput=append:" + ACTION_LOG, "-p", "StandardError=append:" + ACTION_LOG,
+                    "bash", "-c", script], capture_output=True, text=True)
+    return True
+def installer_script(tag):
+    return ("set -e; curl -fsSLo /var/tmp/setup-datum.sh https://raw.githubusercontent.com/%s/%s/setup-datum.sh && " % (REPO, tag))
+def answers_file(snapshot):
+    c = load_conf()
+    a = "%s\n%s\n%s\n" % (c.get("address", ""), c.get("name", ""), c.get("pool", ""))
+    a += ("y\n" if snapshot else "n\n") + "y\n"   # snapshot question (only asked when one is offered), then the confirm
+    p = "/var/tmp/xordesk-answers.txt"; open(p, "w").write(a); os.chmod(p, 0o600); return p
+
+# ------------------------------------------------------------------ auth
+def check_password(pw):
+    c = load_conf(); h = hashlib.sha256((c.get("salt", "") + pw).encode()).hexdigest()
+    return hmac.compare_digest(h, c.get("password_sha256", "x"))
+def make_token(): return hmac.new(SESSION_SECRET, b"session", hashlib.sha256).hexdigest()
+def csrf(): return make_token()[:24]
+
+# ------------------------------------------------------------------ html
+CSS = """
+:root{--paper:#F4F6F5;--card:#fff;--grid:#E3E8E7;--ink:#1A232D;--muted:#4A5763;--accent:#2E8FA3;--ok:#1E8A48;--bad:#C0392B;--warn:#B7791F}
+@media (prefers-color-scheme:dark){:root{--paper:#0F141A;--card:#1A222C;--grid:#2C3846;--ink:#F2F5F8;--muted:#AAB6C2;--accent:#7FB0EC;--ok:#5FCB7A;--bad:#FF7B72;--warn:#E0B95A}}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 Inter,system-ui,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:0 20px}.top{border-bottom:1px solid var(--grid);position:sticky;top:0;background:var(--paper);z-index:2}
+.top .wrap{display:flex;align-items:center;gap:22px;height:58px}.brand{font-weight:700;font-size:18px}.brand span{color:var(--muted);font-weight:500;font-size:13px;margin-left:8px}
+nav a{color:var(--muted);text-decoration:none;font-weight:500;margin-right:16px}nav a[aria-current]{color:var(--ink)}.spacer{flex:1}
+main{padding:26px 0 60px}h1{font-size:24px;margin:0 0 14px}h2{font-size:17px;margin:22px 0 8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--grid);border-radius:12px;padding:16px 18px}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-variant-numeric:tabular-nums}.kv b{color:var(--muted);font-weight:500}
+.pill{display:inline-block;padding:1px 9px;border-radius:12px;font-size:12px;font-weight:700}.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}.warn{background:color-mix(in srgb,var(--warn) 22%,transparent);color:var(--warn)}
+.big{font-size:26px;font-weight:600;line-height:1.1}.muted{color:var(--muted)}.small{font-size:13.5px}.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:14px}
+table{border-collapse:collapse;width:100%;margin-top:6px}th,td{padding:8px 10px;border-bottom:1px solid var(--grid);text-align:left;font-variant-numeric:tabular-nums}th{color:var(--muted);font-size:13px;font-weight:600}.num{text-align:right}
+form.f{display:grid;gap:12px;max-width:560px}label{display:block;font-size:13.5px;color:var(--muted);margin-bottom:4px}
+input[type=text],input[type=password]{width:100%;background:var(--paper);border:1px solid var(--grid);color:var(--ink);padding:9px 12px;border-radius:8px;font:inherit}
+button,.btn{background:var(--accent);color:#fff;border:0;padding:9px 16px;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+button.sec{background:var(--card);color:var(--ink);border:1px solid var(--grid)}button[disabled]{opacity:.5;cursor:default}
+pre{background:var(--card);border:1px solid var(--grid);border-radius:10px;padding:12px 14px;overflow:auto;font-size:13px;line-height:1.45;max-height:60vh}
+.banner{border-radius:12px;padding:14px 18px;font-weight:600;margin-bottom:16px}.banner.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+.banner.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}.banner.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
+.actions{display:flex;flex-wrap:wrap;gap:10px}.note{color:var(--muted);font-size:14px}
+"""
+def page(title, body, current="/", refresh=0):
+    nav = "".join('<a href="%s"%s>%s</a>' % (h, ' aria-current="page"' if current == h else "", n) for h, n in (("/", "Overview"), ("/rigs", "Rigs"), ("/settings", "Settings"), ("/actions", "Actions"), ("/logs", "Logs")))
+    meta = '<meta http-equiv="refresh" content="%d">' % refresh if refresh else ""
+    return ("<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>%s<title>%s - Xor Desk</title><style>%s</style></head><body>"
+            "<div class=top><div class=wrap><div class=brand>Xor Desk<span>your node, your gateway</span></div><nav>%s</nav><span class=spacer></span><a class='muted small' href='/logout'>log out</a></div></div>"
+            "<main><div class=wrap>%s</div></main></body></html>") % (meta, esc(title), CSS, nav, body)
+
+def pill(ok, text, warn=False): return '<span class="pill %s">%s</span>' % ("ok" if ok else ("warn" if warn else "bad"), esc(text))
+
+def overview():
+    n, g = node_status(), gw_status(); c = load_conf()
+    if n.get("at_tip") and g["service"] == "active" and g.get("api"):
+        banner = '<div class="banner ok">Mining your own blocks: node at the tip, gateway up, %s rig%s connected.</div>' % (len(g.get("rigs", [])), "" if len(g.get("rigs", [])) == 1 else "s")
+    elif n.get("rpc") and not n.get("at_tip"):
+        banner = '<div class="banner warn">Node still syncing (%s%%) - the gateway serves no work until it reaches the tip. Nothing to do but wait, or take the snapshot under Actions.</div>' % n.get("progress")
+    elif n["service"] != "active":
+        banner = '<div class="banner bad">The node service is not running. Check Logs, or restart it under Actions.</div>'
+    elif g["service"] != "active":
+        banner = '<div class="banner bad">The gateway service is not running. Check Logs, or restart it under Actions.</div>'
+    else:
+        banner = '<div class="banner warn">Waiting for the node to answer.</div>'
+    node = ('<div class=card><h2 style="margin-top:0">Node</h2><div class=kv>'
+            '<b>service</b><span>%s</span><b>chain</b><span>%s</span><b>height</b><span>%s / %s headers</span><b>peers</b><span>%s</span><b>version</b><span class=small>%s</span><b>disk</b><span>%s GB (pruned)</span></div></div>'
+            % (pill(n["service"] == "active", n["service"]),
+               (pill(True, "at tip") if n.get("at_tip") else pill(False, "syncing %s%%" % n.get("progress", "?"), warn=True)) if n.get("rpc") else pill(False, "RPC not answering", warn=True),
+               n.get("height", "-"), n.get("headers", "-"), n.get("peers", "-"), n.get("version", "-"), n.get("size_gb", "-")))
+    gw = ('<div class=card><h2 style="margin-top:0">Gateway</h2><div class=kv>'
+          '<b>service</b><span>%s</span><b>hashrate</b><span class=big>%s TH/s</span><b>rigs</b><span>%s</span><b>shares</b><span>%s accepted, %s rejected</span><b>pool</b><span class=mono>%s</span><b>version</b><span class=small>%s</span></div></div>'
+          % (pill(g["service"] == "active", g["service"]), g.get("hashrate_ths", "-") if g.get("api") else "-", len(g.get("rigs", [])) if g.get("api") else "-",
+             g.get("accepted", "-"), g.get("rejected", "-"), g["pool"], g.get("version", "-")))
+    earn = pool_earnings(g["pool"].split(":")[0], g["address"])
+    if earn:
+        w = earn.get("window") or earn
+        rows = "".join("<b>%s</b><span>%s</span>" % (esc(k), esc(v)) for k, v in earn.items() if not k.startswith("_") and not isinstance(v, (dict, list)))
+        e = '<div class=card><h2 style="margin-top:0">On the pool</h2><div class="kv small">%s</div><p class=note style="margin:10px 0 0"><a href="%s">Your page on the pool &rarr;</a></p></div>' % (rows or "<span class=muted>no shares in the window yet</span>", esc(earn["_page"]))
+    else:
+        e = '<div class=card><h2 style="margin-top:0">On the pool</h2><p class=note>This gateway points at <span class=mono>%s</span>. Earnings are shown on that pool\'s own site.</p></div>' % esc(g["pool"])
+    ident = '<div class=card><h2 style="margin-top:0">This box</h2><div class="kv small"><b>payout address</b><span class=mono>%s</span><b>block name</b><span>%s</span><b>stratum</b><span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span><b>installer</b><span>%s &middot; Xor Desk %s</span></div></div>' % (
+        esc(g["address"]), esc(g["name"]), g["stratum_port"], esc(c.get("installer_tag", "?")), VERSION)
+    return page("Overview", "<h1>Overview</h1>" + banner + '<div class=grid>' + node + gw + e + ident + "</div><p class='note' style='margin-top:14px'>Refreshes every 30 s. Nothing on this page leaves this machine except the pull of your public pool stats when you open it.</p>", "/", refresh=30)
+
+def rigs():
+    g = gw_status()
+    if not g.get("api"): body = "<p class=note>The gateway API is not answering (is the gateway running, and is <span class=mono>api.admin_password</span> set in gateway.json?).</p>"
+    elif not g["rigs"]: body = "<p class=note>No rigs connected. Point one at <span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span>, worker <span class=mono>anything.rig1</span>, password <span class=mono>x</span>.</p>" % g["stratum_port"]
+    else:
+        body = "<table><tr><th>Worker</th><th>From</th><th class=num>TH/s</th><th class=num>Accepted</th><th class=num>Rejected</th><th>Agent</th></tr>" + "".join(
+            "<tr><td class=mono>%s</td><td class=mono>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=small>%s</td></tr>" % (esc(r["worker"]), esc(r["host"]), r["hashrate_ths"], esc(r["accepted"]), esc(r["rejected"]), esc(r["agent"])) for r in g["rigs"]) + "</table>"
+    return page("Rigs", "<h1>Rigs</h1><div class=card>%s</div><p class=note style='margin-top:12px'>Per-connection counts since each rig connected. A reject rate under 2%% is normal.</p>" % body, "/rigs", refresh=30)
+
+ADDR_RE = re.compile(r"^(bc1[qp][a-z0-9]{38,58}|[13][A-Za-z0-9]{25,34})$")
+def settings(msg=""):
+    g = gw_conf(); m = g.get("mining", {}); d = g.get("datum", {})
+    body = ('<h1>Settings</h1>%s<div class=card><form class=f method=post action="/settings"><input type=hidden name=csrf value="%s">'
+            '<div><label>Payout address (a wallet you hold the keys to)</label><input type=text name=address value="%s" class=mono></div>'
+            '<div><label>Block name (up to 60 characters, stamped into every block you help find)</label><input type=text name=name value="%s"></div>'
+            '<div><label>DATUM pool endpoint (host:port)</label><input type=text name=pool value="%s:%s" class=mono></div>'
+            '<div><label>Pool public key (only change if you move to another pool)</label><input type=text name=pubkey value="%s" class=mono></div>'
+            '<div><button>Save and restart the gateway</button> <span class=note>Takes effect within a few seconds; rigs reconnect on their own.</span></div></form></div>'
+            % (msg, csrf(), esc(m.get("pool_address", "")), esc(m.get("coinbase_tag_secondary", "")), esc(d.get("pool_host", "")), esc(d.get("pool_port", "")), esc(d.get("pool_pubkey", ""))))
+    return page("Settings", body, "/settings")
+def save_settings(form):
+    addr = (form.get("address") or "").strip(); name = (form.get("name") or "").strip(); pool = (form.get("pool") or "").strip(); pk = (form.get("pubkey") or "").strip()
+    if not ADDR_RE.match(addr): return settings('<div class="banner bad">That does not look like a valid address.</div>')
+    if not (0 < len(name) <= 60 and re.match(r"^[A-Za-z0-9 ._-]+$", name)): return settings('<div class="banner bad">Block name: letters, numbers, spaces . _ - only, up to 60 characters.</div>')
+    if ":" not in pool: return settings('<div class="banner bad">Pool endpoint must be host:port.</div>')
+    host, port = pool.rsplit(":", 1)
+    if not (re.match(r"^[A-Za-z0-9.-]+$", host) and port.isdigit() and 0 < int(port) < 65536): return settings('<div class="banner bad">Pool endpoint must be host:port.</div>')
+    if not re.match(r"^[0-9a-f]{128}$", pk): return settings('<div class="banner bad">Pool public key must be 128 hex characters.</div>')
+    g = gw_conf(); g.setdefault("mining", {}); g.setdefault("datum", {})
+    g["mining"]["pool_address"] = addr; g["mining"]["coinbase_tag_primary"] = name; g["mining"]["coinbase_tag_secondary"] = name
+    g["datum"]["pool_host"] = host; g["datum"]["pool_port"] = int(port); g["datum"]["pool_pubkey"] = pk
+    tmp = GW_CONF + ".tmp"; json.dump(g, open(tmp, "w"), indent=2); os.replace(tmp, GW_CONF)
+    c = load_conf(); c.update(address=addr, name=name, pool="%s:%s" % (host, port)); json.dump(c, open(CONF, "w"), indent=2)
+    sh("systemctl", "restart", "ratum-gateway")
+    return settings('<div class="banner ok">Saved. Gateway restarted.</div>')
+
+def actions(msg=""):
+    n = node_status(); c = load_conf(); snap = snapshot_info(); latest = latest_release(); running = action_running()
+    cur = c.get("installer_tag", "")
+    upd = ('<span class="pill warn">update available: %s</span>' % esc(latest)) if latest and latest != cur else ('<span class="pill ok">up to date (%s)</span>' % esc(cur) if cur else "")
+    snap_line = ""
+    if snap:
+        if n.get("height") and n["height"] >= snap.get("height", 0): snap_line = "<p class=note>Your node (height %s) is already past the published snapshot (%s); nothing to fetch.</p>" % (n["height"], snap["height"])
+        else: snap_line = "<p class=note>Snapshot at height %s, %.1f GB. Replaces this node's chain data with a verified copy so it starts at the tip in minutes.</p>" % (snap["height"], snap.get("size_bytes", 0) / 1e9)
+    dis = " disabled" if running else ""
+    body = ('<h1>Actions</h1>%s<div class=card><h2 style="margin-top:0">Update</h2><p class=note>Re-runs the installer with your saved answers: fetches the current Knots and ratum releases (checksums verified), keeps chain data. %s</p>'
+            '<form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=update><button%s>Update now</button></form></div>'
+            '<div class=card><h2 style="margin-top:0">Chain snapshot</h2>%s<form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=snapshot><button%s>Download and use the snapshot</button></form></div>'
+            '<div class=card><h2 style="margin-top:0">Restart</h2><div class=actions><form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=restart-node><button class=sec%s>Restart node</button></form>'
+            '<form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=restart-gateway><button class=sec%s>Restart gateway</button></form></div></div>'
+            '<div class=card><h2 style="margin-top:0">Action log %s</h2><pre>%s</pre></div>'
+            % (msg, upd, csrf(), dis, snap_line, csrf(), dis, csrf(), dis, csrf(), dis, '<span class="pill warn">running</span>' if running else "", esc(action_log()) or "(nothing yet)"))
+    return page("Actions", body, "/actions", refresh=15 if running else 0)
+def do_action(form):
+    what = form.get("what")
+    if action_running(): return actions('<div class="banner warn">An action is already running.</div>')
+    tag = latest_release() or load_conf().get("installer_tag") or "main"
+    if what == "update":
+        run_action("update to %s" % tag, installer_script(tag) + "bash /var/tmp/setup-datum.sh < %s" % answers_file(False))
+        c = load_conf(); c["installer_tag"] = tag; json.dump(c, open(CONF, "w"), indent=2)
+    elif what == "snapshot":
+        run_action("snapshot", installer_script(tag) + "bash /var/tmp/setup-datum.sh < %s" % answers_file(True))
+    elif what == "restart-node": sh("systemctl", "restart", "knotsd"); return actions('<div class="banner ok">Node restarting.</div>')
+    elif what == "restart-gateway": sh("systemctl", "restart", "ratum-gateway"); return actions('<div class="banner ok">Gateway restarting.</div>')
+    else: return actions('<div class="banner bad">Unknown action.</div>')
+    return actions('<div class="banner ok">Started. This page refreshes while it runs.</div>')
+
+def logs(which="gateway"):
+    unit = {"node": "knotsd", "gateway": "ratum-gateway", "desk": "xordesk"}.get(which, "ratum-gateway")
+    out = sh("journalctl", "-u", unit, "-n", "200", "--no-pager", "-o", "short", timeout=15)
+    tabs = " ".join('<a class="btn%s" href="/logs?u=%s">%s</a>' % (" sec" if which != k else "", k, k) for k in ("gateway", "node", "desk"))
+    return page("Logs", "<h1>Logs</h1><div class=actions style='margin-bottom:12px'>%s</div><pre>%s</pre>" % (tabs, esc(out) or "(empty)"), "/logs")
+
+LOGIN = """<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Xor Desk</title><style>%s
+.box{max-width:380px;margin:12vh auto 0}</style></head><body><main><div class="wrap box"><div class=card><h1 style="margin:0 0 4px">Xor Desk</h1><p class=note style="margin:0 0 14px">Local dashboard for this mining machine.</p>%s
+<form class=f method=post action="/login"><div><label>Password (set by the installer)</label><input type=password name=pw autofocus></div><div><button>Log in</button></div></form></div></div></main></body></html>"""
+
+# ------------------------------------------------------------------ http
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def send(self, body, code=200, headers=()):
+        b = body.encode(); self.send_response(code); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(b))); self.send_header("Cache-Control", "no-store")
+        for k, v in headers: self.send_header(k, v)
+        self.end_headers(); self.wfile.write(b)
+    def redirect(self, to, headers=()):
+        self.send_response(303); self.send_header("Location", to)
+        for k, v in headers: self.send_header(k, v)
+        self.end_headers()
+    def authed(self):
+        ck = self.headers.get("Cookie") or ""
+        m = re.search(r"xordesk=([0-9a-f]{64})", ck)
+        return bool(m and hmac.compare_digest(m.group(1), make_token()))
+    def form(self):
+        n = int(self.headers.get("Content-Length") or 0); raw = self.rfile.read(n).decode() if n else ""
+        return {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path); p = u.path; qs = urllib.parse.parse_qs(u.query)
+        if p == "/login": return self.send(LOGIN % (CSS, ""))
+        if p == "/logout": return self.redirect("/login", [("Set-Cookie", "xordesk=; Path=/; Max-Age=0")])
+        if not self.authed(): return self.redirect("/login")
+        try:
+            if p == "/": return self.send(overview())
+            if p == "/rigs": return self.send(rigs())
+            if p == "/settings": return self.send(settings())
+            if p == "/actions": return self.send(actions())
+            if p == "/logs": return self.send(logs((qs.get("u") or ["gateway"])[0]))
+            if p == "/api/status":
+                d = {"node": node_status(), "gateway": gw_status(), "action_running": action_running()}
+                b = json.dumps(d).encode(); self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
+            return self.send(page("Not found", "<h1>Not found</h1>"), 404)
+        except Exception as e:
+            return self.send(page("Error", "<h1>Something broke</h1><pre>%s</pre>" % esc(e)), 500)
+    def do_POST(self):
+        p = urllib.parse.urlparse(self.path).path; f = self.form(); ip = self.client_address[0]
+        if p == "/login":
+            cnt, t0 = FAILS.get(ip, [0, time.time()])
+            if time.time() - t0 > 600: cnt, t0 = 0, time.time()
+            if cnt >= 20: return self.send(LOGIN % (CSS, '<div class="banner bad">Too many attempts. Try again in 10 minutes.</div>'), 429)
+            if check_password(f.get("pw", "")):
+                FAILS.pop(ip, None); return self.redirect("/", [("Set-Cookie", "xordesk=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000" % make_token())])
+            FAILS[ip] = [cnt + 1, t0]; time.sleep(1); return self.send(LOGIN % (CSS, '<div class="banner bad">Wrong password.</div>'), 401)
+        if not self.authed(): return self.redirect("/login")
+        if not hmac.compare_digest(f.get("csrf", ""), csrf()): return self.send(page("Error", "<h1>Bad request</h1><p>Form token mismatch; go back and try again.</p>"), 400)
+        try:
+            if p == "/settings": return self.send(save_settings(f))
+            if p == "/act": return self.send(do_action(f))
+            return self.send(page("Not found", "<h1>Not found</h1>"), 404)
+        except Exception as e:
+            return self.send(page("Error", "<h1>Something broke</h1><pre>%s</pre>" % esc(e)), 500)
+
+if __name__ == "__main__":
+    if not CFG.get("password_sha256"): print("no password in %s - run the installer" % CONF, file=sys.stderr); sys.exit(1)
+    host, port = CFG.get("listen", "127.0.0.1"), int(CFG.get("port", 8090))
+    print("Xor Desk %s on http://%s:%s" % (VERSION, host, port))
+    ThreadingHTTPServer((host, port), H).serve_forever()
