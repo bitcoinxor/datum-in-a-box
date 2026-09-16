@@ -159,7 +159,7 @@ nav a{color:var(--muted);text-decoration:none;font-weight:500;margin-right:16px}
 main{padding:26px 0 60px}h1{font-size:24px;margin:0 0 14px}h2{font-size:17px;margin:0 0 10px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
 .card{background:var(--card);border:1px solid var(--grid);border-radius:12px;padding:16px 18px;min-width:0}.card+.card{margin-top:14px}.grid .card+.card{margin-top:0}
-.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 14px;font-variant-numeric:tabular-nums;align-items:baseline}.kv b{color:var(--muted);font-weight:500;white-space:nowrap}.kv span{min-width:0;overflow-wrap:anywhere}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 14px;font-variant-numeric:tabular-nums;align-items:baseline}.kv b{color:var(--muted);font-weight:500;white-space:nowrap}.kv span{min-width:0;overflow-wrap:anywhere}.kv span.mono{white-space:nowrap;overflow-x:auto;display:block}.card.full{grid-column:1/-1}
 .pill{display:inline-block;padding:1px 9px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap}.pill.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
 .pill.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}.pill.warn{background:color-mix(in srgb,var(--warn) 22%,transparent);color:var(--warn)}.pill.muted{background:var(--grid);color:var(--muted)}
 .big{font-size:26px;font-weight:600;line-height:1.1}.muted{color:var(--muted)}.small{font-size:13.5px}.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:14px}
@@ -241,7 +241,7 @@ def overview():
         e = '<div class=card><h2>On the pool</h2><div class="kv small">%s</div><p class=note style="margin-top:12px"><a href="%s">Your page on the pool &rarr;</a> <span class=muted>(pulled when you open this page; nothing is sent)</span></p></div>' % (rows, esc(earn["_page"]))
     else:
         e = '<div class=card><h2>On the pool</h2><p class=note>This gateway points at <span class=mono>%s</span>. Earnings are shown on that pool\'s own site.</p></div>' % esc(g["pool"])
-    ident = ('<div class=card><h2>This box</h2><div class="kv small"><b>payout address</b><span class=mono>%s</span><b>block name</b><span>%s</span><b>miners connect to</b><span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span><b>installer</b><span>%s &middot; Xor Desk %s</span></div></div>'
+    ident = ('<div class="card full"><h2>This box</h2><div class="kv small"><b>payout address</b><span class=mono>%s</span><b>block name</b><span>%s</span><b>miners connect to</b><span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span><b>installer</b><span>%s &middot; Xor Desk %s</span></div></div>'
              % (esc(g["address"]), esc(g["name"]), g["stratum_port"], esc(c.get("installer_tag", "?")), VERSION))
     body = "<h1>Overview</h1><div class='banner %s' id=banner>%s</div><div class=grid>%s%s%s%s</div><p class='note' style='margin-top:14px'>Values update in place every 15 s. Nothing on this page leaves this machine except the pull of your public pool stats.</p>" % (bk, esc(bt), node, gw, e, ident)
     return page("Overview", body, "/")
