@@ -47,7 +47,7 @@ powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 Check on it any time with `powershell -ExecutionPolicy Bypass -File C:\XorDatum\datum-status.ps1`.
 Keep the PC from sleeping (Settings → System → Power). Xor Desk is Linux-only for now.
 
-## Xor Desk — a local dashboard for the box (optional)
+## Xor Desk — a local dashboard for the box (optional, beta)
 
 The installer offers **Xor Desk**: a small web app that runs *on the mining machine* and shows
 node sync, gateway state, connected rigs and your place in the pool's payout window; lets you

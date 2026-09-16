@@ -16,6 +16,10 @@
 #  Source: https://github.com/bitcoinxor/datum-in-a-box   Questions: https://t.me/bitcoinxor
 # =====================================================================================
 set -euo pipefail
+# Flags:  --noninteractive   take every answer from /etc/xordesk.json (written by a previous run) - used by Xor Desk
+#         --snapshot         with --noninteractive: fetch the chain snapshot if the node is behind it
+NONINT=0; WANT_SNAP=0
+for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
 SETUP_VERSION="v1.2.0"
 KNOTS_VER="29.4.1.knots20260508"
@@ -41,13 +45,13 @@ bold=$'\e[1m'; dim=$'\e[2m'; red=$'\e[31m'; grn=$'\e[32m'; yel=$'\e[33m'; off=$'
 say()  { printf '%s\n' "$*"; }
 ok()   { printf '%s  %s%s\n' "${grn}OK${off}" "$*" ""; }
 warn() { printf '%sWARNING%s  %s\n' "$yel" "$off" "$*"; }
-die()  { printf '\n%sERROR%s  %s\n' "$red" "$off" "$*" >&2; exit 1; }
+die()  { ERR_LINE=${BASH_LINENO[0]}; printf '\n%sERROR%s  %s\n' "$red" "$off" "$*" >&2; exit 1; }
 ERR_LINE=0; trap 'ERR_LINE=$LINENO' ERR
 trap 'rc=$?; if [ $rc -ne 0 ]; then printf "\n%sThe setup stopped at line %s (exit %s).%s Nothing has been deleted; fix the cause and run the script again.\n" "$red" "$ERR_LINE" "$rc" "$off" >&2; fi' EXIT
 
 # Questions come from the terminal even when the script is piped in.
 if ( : < /dev/tty ) 2>/dev/null; then IN=/dev/tty; else IN=""; fi   # a tty we can actually open; otherwise answers come from stdin
-readline() { if [ -n "$IN" ]; then IFS= read -r "$1" < "$IN"; else IFS= read -r "$1"; fi; }   # never reopen a redirected stdin: that restarts it from line 1
+readline() { if [ "$NONINT" -eq 1 ]; then return 1; fi; if [ -n "$IN" ]; then IFS= read -r "$1" < "$IN"; else IFS= read -r "$1"; fi; }   # never reopen a redirected stdin: that restarts it from line 1
 ask() {  # ask VAR "prompt" "default"
   local var="$1" prompt="$2" def="${3:-}" val
   while :; do
@@ -165,7 +169,16 @@ PY
 }
 
 have python3 || { say "installing python3 (used to check the address)..."; apt-get -qq update && apt-get -qq -y install python3 >/dev/null; }
-while :; do
+if [ "$NONINT" -eq 1 ]; then
+  [ -f /etc/xordesk.json ] || die "--noninteractive needs /etc/xordesk.json from a previous run"
+  eval "$(python3 -c 'import json; d=json.load(open("/etc/xordesk.json")); import shlex
+print("ADDR=%s NAME=%s POOL=%s DESK_LISTEN=%s" % (shlex.quote(d.get("address","")), shlex.quote(d.get("name","")), shlex.quote(d.get("pool","")), shlex.quote(d.get("listen","127.0.0.1"))))')"
+  validate_address "$ADDR" || die "saved payout address is not valid: $ADDR"
+  [ "${#NAME}" -le 60 ] && printf '%s' "$NAME" | LC_ALL=C grep -qE '^[A-Za-z0-9 ._-]+$' || die "saved block name is not valid"
+  case "$POOL" in *:*) POOL_HOST="${POOL%%:*}"; POOL_PORT="${POOL##*:}";; esac
+  say ""; say "${bold}Non-interactive run${off} with the saved answers: $ADDR / $NAME / $POOL_HOST:$POOL_PORT"
+fi
+while [ "$NONINT" -eq 0 ]; do
   ask ADDR "   Payout address" "$OLD_ADDR"
   ADDR="${ADDR//[[:space:]]/}"
   if validate_address "$ADDR"; then ok "address checks out"; break; fi
@@ -175,7 +188,7 @@ done
 say ""
 say "2) A name for your blocks. It is written into every block you help find, next to 'Bitcoin Xor', on-chain forever."
 say "   Letters, numbers, spaces and simple punctuation; up to 60 characters."
-while :; do
+while [ "$NONINT" -eq 0 ]; do
   ask NAME "   Your name / tag" "$OLD_NAME"
   NAME="$(printf '%s' "$NAME" | tr -d '\r\n\t' | sed 's/^ *//; s/ *$//')"
   if [ "${#NAME}" -le 60 ] && printf '%s' "$NAME" | LC_ALL=C grep -qE '^[A-Za-z0-9 ._-]+$'; then ok "tag: $NAME"; break; fi
@@ -185,7 +198,7 @@ done
 say ""
 say "3) Which pool endpoint to send shares to. Press Enter for the default. If this machine is in Asia or Europe you can use"
 say "   hk.datum.xorpool.com:28915 or eu.datum.xorpool.com:28915 instead - same pool, same payout, just closer."
-while :; do
+while [ "$NONINT" -eq 0 ]; do
   ask POOL "   DATUM pool (host:port)" "${OLD_POOL:-$POOL_HOST:$POOL_PORT}"
   POOL="${POOL//[[:space:]]/}"; POOL="${POOL#*://}"
   case "$POOL" in *:*) H="${POOL%%:*}"; P="${POOL##*:}";; *) H="$POOL"; P="$POOL_PORT";; esac
@@ -211,17 +224,19 @@ if [ -n "$SNAP_FILE" ]; then
     say "4) Skip the initial sync? A snapshot of the pruned chain at height $SNAP_H ($((SNAP_SIZE/1073741824)) GB download) is available."
     say "   With it the node starts at the tip in minutes instead of 1-3 days. You trust this copy of history up to"
     say "   height $SNAP_H (like any bootstrap); every block after it is verified by your own node."
-    if confirm_default_yes "   Download the snapshot?"; then SNAP=1; ok "snapshot: height $SNAP_H"; else say "   ok - syncing from scratch"; fi
+    if [ "$NONINT" -eq 1 ]; then SNAP=$WANT_SNAP; [ "$SNAP" -eq 1 ] && ok "snapshot: height $SNAP_H (requested)"
+    elif confirm_default_yes "   Download the snapshot?"; then SNAP=1; ok "snapshot: height $SNAP_H"; else say "   ok - syncing from scratch"; fi
   fi
 fi
 
 DESK=0; DESK_LISTEN="127.0.0.1"
 OLD_DESK=0; [ -f /etc/xordesk.json ] && OLD_DESK=1
 say ""
-say "5) Xor Desk: a small web dashboard that runs on this machine - node sync, gateway, rigs, settings, one-click"
+say "5) Xor Desk (beta): a small web dashboard that runs on this machine - node sync, gateway, rigs, settings, one-click"
 say "   update/snapshot/restart, logs. It binds to this machine only and sends nothing anywhere."
 if [ "$OLD_DESK" -eq 1 ]; then say "   (already installed - it will be updated)"; fi
-if confirm_default_yes "   Install Xor Desk?"; then
+if [ "$NONINT" -eq 1 ]; then DESK=1; ok "Xor Desk: keep ($( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo LAN || echo "this machine only" ))"
+elif confirm_default_yes "   Install Xor Desk?"; then
   DESK=1
   # a private (RFC1918) address means this box is on a LAN behind NAT: offer LAN access; a public IP stays localhost-only
   MYIP4=$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
@@ -243,7 +258,7 @@ say "  Node             $NODE_DIR  (pruned, ~14 GB, RPC local-only)"
 [ "$DESK" -eq 1 ] && say "  Xor Desk         http://$( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo "${MYIP4:-this-machine}" || echo 127.0.0.1 ):8090  (password shown at the end)"
 [ "$NEED_SWAP" -eq 1 ] && say "  Swap             add a 2 GB /swapfile"
 say ""
-confirm "Install with these settings?" || { say "Nothing changed."; trap - EXIT; exit 0; }
+if [ "$NONINT" -eq 0 ]; then confirm "Install with these settings?" || { say "Nothing changed."; trap - EXIT; exit 0; }; fi
 
 # ---------------------------------------------------------------- install
 say ""
@@ -378,9 +393,18 @@ ok "services"
 DESK_PASS=""
 if [ "$DESK" -eq 1 ]; then
   mkdir -p /opt/xordesk /var/log/xordesk
-  curl -fsSLo /opt/xordesk/xordesk.py "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.py" || die "could not download Xor Desk"
-  curl -fsSLo /etc/systemd/system/xordesk.service "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.service" || die "could not download the Xor Desk service file"
-  python3 -m py_compile /opt/xordesk/xordesk.py || die "Xor Desk download is not valid python"
+  DESK_OK=1
+  if curl -fsSLo /opt/xordesk/xordesk.py.new "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.py" \
+     && curl -fsSLo /etc/systemd/system/xordesk.service.new "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.service" \
+     && python3 -m py_compile /opt/xordesk/xordesk.py.new; then
+    mv -f /opt/xordesk/xordesk.py.new /opt/xordesk/xordesk.py; mv -f /etc/systemd/system/xordesk.service.new /etc/systemd/system/xordesk.service
+  else
+    rm -f /opt/xordesk/xordesk.py.new /etc/systemd/system/xordesk.service.new
+    if [ -f /opt/xordesk/xordesk.py ]; then warn "could not download the Xor Desk update; keeping the installed copy"
+    else warn "could not download Xor Desk; skipping it (the node and gateway are unaffected - re-run later to add it)"; DESK_OK=0; fi
+  fi
+fi
+if [ "$DESK" -eq 1 ] && [ "$DESK_OK" -eq 1 ]; then
   OLD_HASH=""; OLD_SALT=""
   if [ -f /etc/xordesk.json ]; then
     OLD_HASH=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("password_sha256",""))' /etc/xordesk.json 2>/dev/null)

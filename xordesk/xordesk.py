@@ -17,7 +17,7 @@ NODE_DIR = "/var/lib/knots"
 GW_CONF = "/etc/ratum/gateway.json"
 ACTION_LOG = "/var/log/xordesk/action.log"
 REPO = "bitcoinxor/datum-in-a-box"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 def load_conf():
     try: return json.load(open(CONF))
@@ -131,13 +131,12 @@ def run_action(name, script):
     subprocess.run(["systemd-run", "--unit", "xordesk-action", "--collect", "-p", "StandardOutput=append:" + ACTION_LOG, "-p", "StandardError=append:" + ACTION_LOG,
                     "bash", "-c", script], capture_output=True, text=True)
     return True
-def installer_script(tag):
-    return ("set -e; curl -fsSLo /var/tmp/setup-datum.sh https://raw.githubusercontent.com/%s/%s/setup-datum.sh && " % (REPO, tag))
-def answers_file(snapshot):
-    c = load_conf()
-    a = "%s\n%s\n%s\n" % (c.get("address", ""), c.get("name", ""), c.get("pool", ""))
-    a += ("y\n" if snapshot else "n\n") + "y\n"   # snapshot question (only asked when one is offered), then the confirm
-    p = "/var/tmp/xordesk-answers.txt"; open(p, "w").write(a); os.chmod(p, 0o600); return p
+def installer_script(tag, snapshot=False):
+    """Fetch the installer at `tag` and run it non-interactively from the saved answers in /etc/xordesk.json.
+    /etc/xordesk.json may set "installer_url" to override the download location (development only)."""
+    url = load_conf().get("installer_url") or "https://raw.githubusercontent.com/%s/%s/setup-datum.sh" % (REPO, tag)
+    return ("(curl -fsSLo /var/tmp/setup-datum.sh '%s' && bash /var/tmp/setup-datum.sh --noninteractive%s); rc=$?; echo \"== finished, exit $rc\"; exit $rc"
+            % (url.replace("'", ""), " --snapshot" if snapshot else ""))
 
 # ------------------------------------------------------------------ auth
 def check_password(pw):
@@ -307,10 +306,10 @@ def do_action(form):
     if action_running(): return actions('<div class="banner warn">An action is already running.</div>')
     tag = latest_release() or load_conf().get("installer_tag") or "main"
     if what == "update":
-        run_action("update to %s" % tag, installer_script(tag) + "bash /var/tmp/setup-datum.sh < %s" % answers_file(False))
+        run_action("update to %s" % tag, installer_script(tag))
         c = load_conf(); c["installer_tag"] = tag; json.dump(c, open(CONF, "w"), indent=2)
     elif what == "snapshot":
-        run_action("snapshot", installer_script(tag) + "bash /var/tmp/setup-datum.sh < %s" % answers_file(True))
+        run_action("snapshot", installer_script(tag, snapshot=True))
     elif what == "restart-node": sh("systemctl", "restart", "knotsd"); return actions('<div class="banner ok">Node restarting.</div>')
     elif what == "restart-gateway": sh("systemctl", "restart", "ratum-gateway"); return actions('<div class="banner ok">Gateway restarting.</div>')
     else: return actions('<div class="banner bad">Unknown action.</div>')

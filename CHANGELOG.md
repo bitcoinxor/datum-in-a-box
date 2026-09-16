@@ -1,6 +1,7 @@
 # Changelog
 
 ## v1.2.0 — 2026-09-15
+- Installer flags `--noninteractive` (answers from /etc/xordesk.json) and `--snapshot`; Xor Desk's Update and Snapshot buttons use them. A failed Xor Desk download no longer fails a node/gateway update.
 - Windows installer `setup-datum.ps1`: same questions and checks, official Windows builds with verified checksums, scheduled tasks that start with Windows, firewall rule for 23334, snapshot via the built-in tar.
 - Xor Desk 0.1: optional local web dashboard installed by the script (overview, rigs, settings, update / snapshot / restart, logs). Localhost by default, LAN opt-in, password shown once. Sends nothing anywhere.
 - Installer sets a gateway API admin password (needed for the rigs table) and keeps it across re-runs.
