@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.2.3 — 2026-09-15
+- Windows: on a re-run the node is asked to shut down and the script waits for it (up to 3 minutes) before anything else. Stopping the scheduled task first killed bitcoind outright, so the next start rewound to the last flushed state and replayed. The finish text now also distinguishes "restarted with existing chain data" from a from-scratch sync.
+
 ## v1.2.2 — 2026-09-15
 - Windows: `datum-status.ps1` and the installer's snapshot check called bitcoin-cli through a helper that returned nothing (`cli` is a built-in alias of Clear-Item; a declared `$args` parameter swallows arguments), so status showed "syncing 0%" and the snapshot block hash could not be verified. Fixed; the hash is verified again after the restore.
 - Windows: "Point your ASICs at" shows the address on the interface with the default route (the real LAN) instead of the first adapter, which on many PCs is a Hyper-V / WSL virtual switch.

@@ -16,7 +16,7 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.2.2"
+$SETUP_VERSION = "v1.2.3"
 $KNOTS_VER  = "29.4.1.knots20260508"
 $RATUM_VER  = "0.1.28"
 $POOL_HOST  = "datum.xorpool.com"; $POOL_PORT = 28915
@@ -96,6 +96,17 @@ function Download([string]$url, [string]$out) {
 function TaskExists($n) { return [bool](Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) }
 function StopTask($n) { if (TaskExists $n) { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue } }
 function NodeCli { & "$BIN\bitcoin-cli.exe" "-datadir=$NODE" "-conf=$NODE_CONF" @args 2>$null }   # automatic $args - a declared ($args) parameter swallows the arguments and the call returns nothing
+function StopAll {
+  # gateway first (stateless), then ask the node to shut down and WAIT: Stop-ScheduledTask kills the process outright,
+  # and a killed node has not flushed its chainstate - next start it rewinds to the last flush and replays (minutes to hours)
+  StopTask "XorDatum Gateway"; Get-Process ratum-gateway -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  if ((Get-Process bitcoind -ErrorAction SilentlyContinue) -and (Test-Path "$BIN\bitcoin-cli.exe")) {
+    try { NodeCli stop | Out-Null } catch {}
+    Say "  waiting for the node to shut down cleanly..."
+    for ($i = 0; $i -lt 180; $i++) { if (-not (Get-Process bitcoind -ErrorAction SilentlyContinue)) { break }; Start-Sleep 1 }
+  }
+  StopTask "XorDatum Node"; Get-Process bitcoind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
 
 # ---------------------------------------------------------------- preflight
 if (-not [Environment]::Is64BitOperatingSystem) { Die "64-bit Windows is required" }
@@ -109,6 +120,7 @@ Say "Machine: $cpus CPU, $memMB MB RAM, $freeGB GB free on $($ROOT.Substring(0,2
 if ($freeGB -lt $MIN_DISK_GB) { Die "need at least $MIN_DISK_GB GB free on $($ROOT.Substring(0,2)) (have $freeGB GB). The pruned node uses ~14 GB plus headroom." }
 if ($memMB -lt 3500) { Warn "less than 4 GB RAM - it works, but the first sync will be slow; Windows manages swap on its own" }
 $UPDATE = (Test-Path $NODE_CONF) -or (Test-Path $GW_CONF)
+$hadChain = Test-Path "$NODE\chainstate"   # chain data from an earlier run - decides the wording at the end
 if ($UPDATE) { Say ""; Say "An existing install was found in $ROOT. It will be updated in place: binaries refreshed, configs rewritten from your answers, chain data kept." }
 
 # ---------------------------------------------------------------- questions
@@ -175,9 +187,7 @@ if (-not (ConfirmNo "Install with these settings?")) { Say "Nothing changed."; e
 # ---------------------------------------------------------------- install
 Say ""; Say "Installing..."
 foreach ($d in @($ROOT, $BIN, $NODE, $GW, $LOGS, $TMP)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
-StopTask "XorDatum Gateway"; StopTask "XorDatum Node"
-if (Test-Path "$BIN\bitcoin-cli.exe") { try { NodeCli stop | Out-Null; Start-Sleep 5 } catch {} }
-Get-Process bitcoind, ratum-gateway -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+StopAll
 
 # Knots
 $curKnots = ""; if (Test-Path "$BIN\bitcoind.exe") { try { $curKnots = (& "$BIN\bitcoind.exe" --version | Select-Object -First 1) } catch {} }
@@ -287,8 +297,7 @@ if ($doSnapshot) {
   Say "verifying checksum..."
   if ((Get-Sha256 $f) -ne $snap.sha256.ToLower()) { Remove-Item $f -Force; Die "snapshot checksum MISMATCH - not using it. Run the script again to re-download." }
   Ok "checksum matches"
-  StopTask "XorDatum Gateway"; try { NodeCli stop | Out-Null } catch {}; StopTask "XorDatum Node"; Start-Sleep 5
-  Get-Process bitcoind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  StopAll
   Remove-Item "$NODE\blocks", "$NODE\chainstate" -Recurse -Force -ErrorAction SilentlyContinue
   $tar = "$env:SystemRoot\System32\tar.exe"
   & $tar -xf $f -C $NODE
@@ -310,6 +319,7 @@ Say ""; Write-Host "Done." -ForegroundColor Green; Say ""
 Say "  Point your ASICs at:   stratum+tcp://$($myip):$STRATUM_PORT"
 Say "                         worker:  anything.rig1   password:  x"; Say ""
 if ($doSnapshot) { Say "  The node started from the snapshot and is catching up the last few blocks - your ASICs get work within minutes." }
+elseif ($hadChain) { Say "  The node restarted with its existing chain data and is catching up whatever it missed - your ASICs get work within minutes." }
 else { Say "  The node is now syncing the chain from the start - 1 to 3 days on a small PC. Your ASICs get work automatically"; Say "  the moment it reaches the tip; until then the gateway waits. Leave the PC on (and not sleeping)." }
 Say ""; Say "  Check on it any time (PowerShell):  powershell -ExecutionPolicy Bypass -File $ROOT\datum-status.ps1"
 Say "  Your stats once shares flow:        $POOL_URL/miner/$ADDR"
