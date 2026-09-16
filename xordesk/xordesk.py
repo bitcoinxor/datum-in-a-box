@@ -76,9 +76,9 @@ def gw_status():
         with urllib.request.urlopen(req, timeout=5) as r: d = json.load(r)
     except Exception: return st
     st["api"] = True; st["version"] = d.get("version"); st["uptime"] = d.get("uptime")
-    hist = (d.get("hashrate") or {}).get("history") or []
-    pts = [p[1] for p in hist[-5:] if len(p) > 1 and p[1]]           # average the last non-empty minutes
-    st["hashrate_ths"] = round((sum(pts) / len(pts)) / 1e12, 3) if pts else 0.0
+    strat = d.get("stratum") if isinstance(d.get("stratum"), dict) else {}
+    st["hashrate_ths"] = round(float(strat.get("hashrate_ths") or 0), 3)
+    st["connections"] = strat.get("connections")
     acc = d.get("shares_accepted") or {}; rej = d.get("shares_rejected") or {}
     st["accepted"] = acc.get("count", acc) if isinstance(acc, dict) else acc
     st["rejected"] = rej.get("count", rej) if isinstance(rej, dict) else rej
@@ -86,32 +86,36 @@ def gw_status():
     if isinstance(cl, dict): cl = list(cl.values())
     st["rigs"] = []
     for c in cl:
-        st["rigs"].append({"worker": (c.get("username") or c.get("auth_username") or "?"), "host": str(c.get("remote_host") or c.get("host") or "").split(":")[0],
-                           "hashrate_ths": round((c.get("hashrate_hs") or c.get("hashrate") or 0) / 1e12, 3) if isinstance(c.get("hashrate_hs") or c.get("hashrate") or 0, (int, float)) else 0,
-                           "accepted": c.get("accepted", c.get("shares_accepted", "")), "rejected": c.get("rejected", c.get("shares_rejected", "")),
-                           "agent": c.get("user_agent", c.get("agent", ""))})
-    st["stratum"] = d.get("stratum") if isinstance(d.get("stratum"), dict) else {}
+        st["rigs"].append({"worker": c.get("username") or "?", "host": str(c.get("remote") or "").rsplit(":", 1)[0],
+                           "hashrate_ths": round(float(c.get("hashrate_ths") or 0), 3), "accepted": c.get("accepted_count", ""), "rejected": c.get("rejected_count", ""),
+                           "agent": c.get("useragent", ""), "vardiff": c.get("vardiff", ""), "last_share_s": int(c.get("last_accepted_seconds") or 0),
+                           "connected_min": int((c.get("subscribed_seconds") or 0) // 60), "unpayable": bool(c.get("unpayable"))})
+    st["stratum"] = strat
     return st
 
-def snapshot_info():
+def fetch_json(url, timeout=8):
     try:
-        with urllib.request.urlopen("https://snapshot.xorpool.com/latest.json", timeout=8) as r: return json.load(r)
+        req = urllib.request.Request(url, headers={"User-Agent": "xordesk/" + VERSION, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r: return json.load(r)
     except Exception: return None
 
+def snapshot_info(): return fetch_json("https://snapshot.xorpool.com/latest.json")
+
+def vtuple(t):
+    m = re.match(r"v?(\d+)\.(\d+)\.(\d+)$", t or ""); return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
 def latest_release():
-    try:
-        req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % REPO, headers={"Accept": "application/vnd.github+json", "User-Agent": "xordesk"})
-        with urllib.request.urlopen(req, timeout=8) as r: return json.load(r).get("tag_name")
-    except Exception: return None
+    """Newest vX.Y.Z tag of the repo (tags, not GitHub Releases)."""
+    tags = fetch_json("https://api.github.com/repos/%s/tags?per_page=30" % REPO) or []
+    names = [t.get("name", "") for t in tags if isinstance(t, dict)]
+    names = [n for n in names if vtuple(n) != (0, 0, 0)]
+    return max(names, key=vtuple) if names else None
 
 def pool_earnings(pool_host, address):
     """Pull (never push) this address's public stats from the pool it is pointed at, if the pool has an API we know."""
     if not address or not pool_host: return None
     if pool_host.endswith("xorpool.com"):
-        try:
-            with urllib.request.urlopen("https://xorpool.com/api/miner/%s" % urllib.parse.quote(address), timeout=8) as r: d = json.load(r)
-            d["_page"] = "https://xorpool.com/datum/miner/" + address; return d
-        except Exception: return {"_page": "https://xorpool.com/datum/miner/" + address}
+        d = fetch_json("https://xorpool.com/api/datum/miner/%s" % urllib.parse.quote(address)) or {}
+        d["_page"] = "https://xorpool.com/datum/miner/" + address; return d
     return None
 
 # ------------------------------------------------------------------ actions (run detached; one at a time)
@@ -199,9 +203,13 @@ def overview():
              g.get("accepted", "-"), g.get("rejected", "-"), g["pool"], g.get("version", "-")))
     earn = pool_earnings(g["pool"].split(":")[0], g["address"])
     if earn:
-        w = earn.get("window") or earn
-        rows = "".join("<b>%s</b><span>%s</span>" % (esc(k), esc(v)) for k, v in earn.items() if not k.startswith("_") and not isinstance(v, (dict, list)))
-        e = '<div class=card><h2 style="margin-top:0">On the pool</h2><div class="kv small">%s</div><p class=note style="margin:10px 0 0"><a href="%s">Your page on the pool &rarr;</a></p></div>' % (rows or "<span class=muted>no shares in the window yet</span>", esc(earn["_page"]))
+        if earn.get("in_window"):
+            rows = ("<b>in the payout window</b><span>%s</span><b>share of next block</b><span>%s%%</span><b>hashrate seen by pool</b><span>%s TH/s</span><b>pays if a block is found now</b><span>%s</span><b>blocks paid so far</b><span>%s</span><b>total paid</b><span>%s</span><b>pool fee</b><span>%s%%</span>"
+                    % (pill(earn.get("payable") is not False, "yes" if earn.get("payable") is not False else "unpayable address"), earn.get("share_percent", 0), earn.get("hashrate_ths", 0), earn.get("pays_if_block_now", 0), earn.get("blocks_paid", 0), earn.get("total_paid", 0), earn.get("fee_pct", "")))
+        elif "in_window" in earn:
+            rows = "<b>in the payout window</b><span class=muted>not yet - appears after your first share</span><b>blocks paid so far</b><span>%s</span><b>total paid</b><span>%s</span>" % (earn.get("blocks_paid", 0), earn.get("total_paid", 0))
+        else: rows = "<span class=muted>pool stats not reachable right now</span>"
+        e = '<div class=card><h2 style="margin-top:0">On the pool</h2><div class="kv small">%s</div><p class=note style="margin:10px 0 0"><a href="%s">Your page on the pool &rarr;</a></p></div>' % (rows, esc(earn["_page"]))
     else:
         e = '<div class=card><h2 style="margin-top:0">On the pool</h2><p class=note>This gateway points at <span class=mono>%s</span>. Earnings are shown on that pool\'s own site.</p></div>' % esc(g["pool"])
     ident = '<div class=card><h2 style="margin-top:0">This box</h2><div class="kv small"><b>payout address</b><span class=mono>%s</span><b>block name</b><span>%s</span><b>stratum</b><span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span><b>installer</b><span>%s &middot; Xor Desk %s</span></div></div>' % (
@@ -213,11 +221,41 @@ def rigs():
     if not g.get("api"): body = "<p class=note>The gateway API is not answering (is the gateway running, and is <span class=mono>api.admin_password</span> set in gateway.json?).</p>"
     elif not g["rigs"]: body = "<p class=note>No rigs connected. Point one at <span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span>, worker <span class=mono>anything.rig1</span>, password <span class=mono>x</span>.</p>" % g["stratum_port"]
     else:
-        body = "<table><tr><th>Worker</th><th>From</th><th class=num>TH/s</th><th class=num>Accepted</th><th class=num>Rejected</th><th>Agent</th></tr>" + "".join(
-            "<tr><td class=mono>%s</td><td class=mono>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=small>%s</td></tr>" % (esc(r["worker"]), esc(r["host"]), r["hashrate_ths"], esc(r["accepted"]), esc(r["rejected"]), esc(r["agent"])) for r in g["rigs"]) + "</table>"
+        body = "<table><tr><th>Worker</th><th>From</th><th class=num>TH/s</th><th class=num>Accepted</th><th class=num>Rejected</th><th class=num>Diff</th><th class=num>Last share</th><th class=num>Connected</th><th>Agent</th></tr>" + "".join(
+            "<tr><td class=mono>%s%s</td><td class=mono>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%ss ago</td><td class=num>%s min</td><td class=small>%s</td></tr>"
+            % (esc(r["worker"]), ' <span class="pill bad">unpayable</span>' if r["unpayable"] else "", esc(r["host"]), r["hashrate_ths"], esc(r["accepted"]), esc(r["rejected"]), esc(r["vardiff"]), r["last_share_s"], r["connected_min"], esc(r["agent"])) for r in g["rigs"]) + "</table>"
     return page("Rigs", "<h1>Rigs</h1><div class=card>%s</div><p class=note style='margin-top:12px'>Per-connection counts since each rig connected. A reject rate under 2%% is normal.</p>" % body, "/rigs", refresh=30)
 
-ADDR_RE = re.compile(r"^(bc1[qp][a-z0-9]{38,58}|[13][A-Za-z0-9]{25,34})$")
+def valid_address(a):
+    a = a.strip(); CH = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+    def polymod(v):
+        G = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]; c = 1
+        for x in v:
+            b = c >> 25; c = ((c & 0x1ffffff) << 5) ^ x
+            for i in range(5):
+                if (b >> i) & 1: c ^= G[i]
+        return c
+    if a.lower().startswith("bc1"):
+        if a != a.lower() and a != a.upper(): return False
+        a = a.lower(); p = a.rfind("1")
+        if p < 1 or p + 7 > len(a) or a[:p] != "bc": return False
+        data = [CH.find(c) for c in a[p + 1:]]
+        if -1 in data: return False
+        hrp = [ord(c) >> 5 for c in "bc"] + [0] + [ord(c) & 31 for c in "bc"]; pm = polymod(hrp + data); v = data[0]
+        if (v == 0 and pm != 1) or (v > 0 and pm != 0x2bc830a3): return False
+        acc = bits = 0; out = []
+        for d in data[1:-6]:
+            acc = (acc << 5) | d; bits += 5
+            while bits >= 8: bits -= 8; out.append((acc >> bits) & 255)
+        return (v == 0 and len(out) in (20, 32)) or (v == 1 and len(out) == 32)
+    if a[:1] in "13":
+        A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; n = 0
+        for c in a:
+            if c not in A: return False
+            n = n * 58 + A.index(c)
+        raw = b"\0" * (len(a) - len(a.lstrip("1"))) + n.to_bytes((n.bit_length() + 7) // 8, "big")
+        return len(raw) == 25 and raw[0] in (0, 5) and hashlib.sha256(hashlib.sha256(raw[:21]).digest()).digest()[:4] == raw[21:]
+    return False
 def settings(msg=""):
     g = gw_conf(); m = g.get("mining", {}); d = g.get("datum", {})
     body = ('<h1>Settings</h1>%s<div class=card><form class=f method=post action="/settings"><input type=hidden name=csrf value="%s">'
@@ -230,7 +268,7 @@ def settings(msg=""):
     return page("Settings", body, "/settings")
 def save_settings(form):
     addr = (form.get("address") or "").strip(); name = (form.get("name") or "").strip(); pool = (form.get("pool") or "").strip(); pk = (form.get("pubkey") or "").strip()
-    if not ADDR_RE.match(addr): return settings('<div class="banner bad">That does not look like a valid address.</div>')
+    if not valid_address(addr): return settings('<div class="banner bad">That does not look like a valid address.</div>')
     if not (0 < len(name) <= 60 and re.match(r"^[A-Za-z0-9 ._-]+$", name)): return settings('<div class="banner bad">Block name: letters, numbers, spaces . _ - only, up to 60 characters.</div>')
     if ":" not in pool: return settings('<div class="banner bad">Pool endpoint must be host:port.</div>')
     host, port = pool.rsplit(":", 1)
