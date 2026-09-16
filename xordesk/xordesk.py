@@ -17,7 +17,7 @@ NODE_DIR = "/var/lib/knots"
 GW_CONF = "/etc/ratum/gateway.json"
 ACTION_LOG = "/var/log/xordesk/action.log"
 REPO = "bitcoinxor/datum-in-a-box"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 def load_conf():
     try: return json.load(open(CONF))
@@ -151,124 +151,125 @@ CSS = """
 :root{--paper:#F4F6F5;--card:#fff;--grid:#E3E8E7;--ink:#1A232D;--muted:#4A5763;--accent:#2E8FA3;--ok:#1E8A48;--bad:#C0392B;--warn:#B7791F}
 @media (prefers-color-scheme:dark){:root{--paper:#0F141A;--card:#1A222C;--grid:#2C3846;--ink:#F2F5F8;--muted:#AAB6C2;--accent:#7FB0EC;--ok:#5FCB7A;--bad:#FF7B72;--warn:#E0B95A}}
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 Inter,system-ui,sans-serif}
-.wrap{max-width:1040px;margin:0 auto;padding:0 20px}.top{border-bottom:1px solid var(--grid);position:sticky;top:0;background:var(--paper);z-index:2}
-.top .wrap{display:flex;align-items:center;gap:22px;height:58px}.brand{font-weight:700;font-size:18px}.brand span{color:var(--muted);font-weight:500;font-size:13px;margin-left:8px}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px}.wrap.wide{max-width:none}
+.top{border-bottom:1px solid var(--grid);position:sticky;top:0;background:var(--paper);z-index:2}
+.top .wrap{display:flex;align-items:center;gap:22px;height:58px;max-width:none}.brand{font-weight:700;font-size:18px;white-space:nowrap}.brand span{color:var(--muted);font-weight:500;font-size:13px;margin-left:8px}
 nav a{color:var(--muted);text-decoration:none;font-weight:500;margin-right:16px}nav a[aria-current]{color:var(--ink)}.spacer{flex:1}
-main{padding:26px 0 60px}h1{font-size:24px;margin:0 0 14px}h2{font-size:17px;margin:22px 0 8px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
-.card{background:var(--card);border:1px solid var(--grid);border-radius:12px;padding:16px 18px}
-.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-variant-numeric:tabular-nums}.kv b{color:var(--muted);font-weight:500}
-.pill{display:inline-block;padding:1px 9px;border-radius:12px;font-size:12px;font-weight:700}.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
-.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}.warn{background:color-mix(in srgb,var(--warn) 22%,transparent);color:var(--warn)}
+.live{font-size:12px;color:var(--muted)}.live i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle}.live.off i{background:var(--bad)}
+main{padding:26px 0 60px}h1{font-size:24px;margin:0 0 14px}h2{font-size:17px;margin:0 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--grid);border-radius:12px;padding:16px 18px;min-width:0}.card+.card{margin-top:14px}.grid .card+.card{margin-top:0}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 14px;font-variant-numeric:tabular-nums;align-items:baseline}.kv b{color:var(--muted);font-weight:500;white-space:nowrap}.kv span{min-width:0;overflow-wrap:anywhere}
+.pill{display:inline-block;padding:1px 9px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap}.pill.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.pill.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}.pill.warn{background:color-mix(in srgb,var(--warn) 22%,transparent);color:var(--warn)}.pill.muted{background:var(--grid);color:var(--muted)}
 .big{font-size:26px;font-weight:600;line-height:1.1}.muted{color:var(--muted)}.small{font-size:13.5px}.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:14px}
 table{border-collapse:collapse;width:100%;margin-top:6px}th,td{padding:8px 10px;border-bottom:1px solid var(--grid);text-align:left;font-variant-numeric:tabular-nums}th{color:var(--muted);font-size:13px;font-weight:600}.num{text-align:right}
-form.f{display:grid;gap:12px;max-width:560px}label{display:block;font-size:13.5px;color:var(--muted);margin-bottom:4px}
-input[type=text],input[type=password]{width:100%;background:var(--paper);border:1px solid var(--grid);color:var(--ink);padding:9px 12px;border-radius:8px;font:inherit}
+.f{display:grid;gap:14px}.f label{display:block;font-size:13.5px;color:var(--muted);margin-bottom:5px}
+input[type=text],input[type=password]{width:100%;background:var(--paper);border:1px solid var(--grid);color:var(--ink);padding:10px 12px;border-radius:8px;font:inherit}input.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:14px}
 button,.btn{background:var(--accent);color:#fff;border:0;padding:9px 16px;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
-button.sec{background:var(--card);color:var(--ink);border:1px solid var(--grid)}button[disabled]{opacity:.5;cursor:default}
-pre{background:var(--card);border:1px solid var(--grid);border-radius:10px;padding:12px 14px;overflow:auto;font-size:13px;line-height:1.45;max-height:60vh}
+button.sec,.btn.sec{background:var(--card);color:var(--ink);border:1px solid var(--grid)}button[disabled]{opacity:.45;cursor:default}
+.tabs{display:flex;gap:6px;margin-bottom:12px}.tabs a{padding:7px 14px;border-radius:8px;border:1px solid var(--grid);color:var(--muted);text-decoration:none;font-weight:600}.tabs a[aria-current]{background:var(--accent);color:#fff;border-color:var(--accent)}
+pre{background:var(--card);border:1px solid var(--grid);border-radius:10px;padding:12px 14px;overflow:auto;font-size:13px;line-height:1.45;margin:0}pre.log{max-height:calc(100vh - 200px)}
 .banner{border-radius:12px;padding:14px 18px;font-weight:600;margin-bottom:16px}.banner.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
 .banner.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}.banner.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
-.actions{display:flex;flex-wrap:wrap;gap:10px}.note{color:var(--muted);font-size:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.note{color:var(--muted);font-size:14px;margin:0}
+.bar{height:10px;border-radius:6px;background:var(--grid);overflow:hidden;margin:6px 0 2px}.bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .6s}
+.card p{margin:0 0 12px}.card p:last-child{margin-bottom:0}
 """
-def page(title, body, current="/", refresh=0):
+JS = r"""
+(function(){
+var dot=document.getElementById('livedot');
+function setText(id,v){var e=document.getElementById(id);if(e&&e.textContent!==String(v))e.textContent=v}
+function setPill(id,cls,text){var e=document.getElementById(id);if(!e)return;var c='pill '+cls;if(e.className!==c)e.className=c;if(e.textContent!==text)e.textContent=text}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function tick(){fetch('/api/status',{cache:'no-store'}).then(function(r){if(r.status===401||r.redirected){location.href='/login';return null}return r.json()}).then(function(d){
+ if(!d)return; if(dot)dot.className='live';
+ var n=d.node,g=d.gateway;
+ if(n){setPill('n-service',n.service==='active'?'ok':'bad',n.service);
+   if(n.rpc){setPill('n-chain',n.at_tip?'ok':'warn',n.at_tip?'at tip':'syncing '+n.progress+'%');setText('n-height',n.height+' / '+n.headers+' headers');setText('n-peers',n.peers);setText('n-version',n.version||'-');setText('n-disk',n.size_gb+' GB (pruned)');
+     var bar=document.getElementById('syncbar');if(bar){document.getElementById('syncwrap').hidden=!!n.at_tip;bar.style.width=n.progress+'%';setText('syncpct',n.progress+'%')}}
+   else setPill('n-chain','warn','RPC not answering')}
+ if(g){setPill('g-service',g.service==='active'?'ok':'bad',g.service);setText('g-hash',(g.api?g.hashrate_ths:'-')+' TH/s');setText('g-rigs',g.api?g.rigs.length:'-');setText('g-shares',(g.accepted!=null?g.accepted:'-')+' accepted, '+(g.rejected!=null?g.rejected:'-')+' rejected');setText('g-version',g.version||'-');
+   var tb=document.getElementById('rigs');if(tb){var h='';g.rigs.forEach(function(r){h+='<tr><td class=mono>'+esc(r.worker)+(r.unpayable?' <span class="pill bad">unpayable</span>':'')+'</td><td class=mono>'+esc(r.host)+'</td><td class=num>'+r.hashrate_ths+'</td><td class=num>'+r.accepted+'</td><td class=num>'+r.rejected+'</td><td class=num>'+r.vardiff+'</td><td class=num>'+r.last_share_s+'s ago</td><td class=num>'+r.connected_min+' min</td><td class=small>'+esc(r.agent)+'</td></tr>'});if(tb.innerHTML!==h)tb.innerHTML=h;var e=document.getElementById('norigs');if(e)e.hidden=g.rigs.length>0}}
+ var b=document.getElementById('banner');if(b&&d.banner){var c='banner '+d.banner[0];if(b.className!==c)b.className=c;if(b.textContent!==d.banner[1])b.textContent=d.banner[1]}
+ var al=document.getElementById('actlog');if(al&&d.action_log!=null&&al.textContent!==d.action_log){al.textContent=d.action_log;al.scrollTop=al.scrollHeight}
+ var ar=document.getElementById('actrun');if(ar){ar.hidden=!d.action_running;document.querySelectorAll('button[data-act]').forEach(function(x){if(!x.dataset.locked)x.disabled=!!d.action_running})}
+}).catch(function(){if(dot)dot.className='live off'})}
+setInterval(tick,15000);
+var lg=document.getElementById('logpre');if(lg){setInterval(function(){fetch('/api/log?u='+lg.dataset.u,{cache:'no-store'}).then(function(r){return r.text()}).then(function(t){if(lg.textContent!==t){var atEnd=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-4;lg.textContent=t;if(atEnd)lg.scrollTop=lg.scrollHeight}}).catch(function(){})},10000)}
+})();
+"""
+def page(title, body, current="/", wide=False):
     nav = "".join('<a href="%s"%s>%s</a>' % (h, ' aria-current="page"' if current == h else "", n) for h, n in (("/", "Overview"), ("/rigs", "Rigs"), ("/settings", "Settings"), ("/actions", "Actions"), ("/logs", "Logs")))
-    meta = '<meta http-equiv="refresh" content="%d">' % refresh if refresh else ""
-    return ("<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>%s<title>%s - Xor Desk</title><style>%s</style></head><body>"
-            "<div class=top><div class=wrap><div class=brand>Xor Desk<span>your node, your gateway</span></div><nav>%s</nav><span class=spacer></span><a class='muted small' href='/logout'>log out</a></div></div>"
-            "<main><div class=wrap>%s</div></main></body></html>") % (meta, esc(title), CSS, nav, body)
+    return ("<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>%s - Xor Desk</title><style>%s</style></head><body>"
+            "<div class=top><div class=wrap><div class=brand>Xor Desk<span>your node, your gateway</span></div><nav>%s</nav><span class=spacer></span><span class=live id=livedot title='updates in place every 15 s'><i></i>live</span><a class='muted small' href='/logout' style='margin-left:16px'>log out</a></div></div>"
+            "<main><div class='wrap%s'>%s</div></main><script>%s</script></body></html>") % (esc(title), CSS, nav, " wide" if wide else "", body, JS)
 
-def pill(ok, text, warn=False): return '<span class="pill %s">%s</span>' % ("ok" if ok else ("warn" if warn else "bad"), esc(text))
+def pill(ok, text, warn=False, id=""): return '<span class="pill %s"%s>%s</span>' % ("ok" if ok else ("warn" if warn else "bad"), (' id="%s"' % id) if id else "", esc(text))
+
+def banner_for(n, g):
+    if n.get("at_tip") and g["service"] == "active" and g.get("api"):
+        k = len(g.get("rigs", [])); return ("ok", "Mining your own blocks: node at the tip, gateway up, %d rig%s connected." % (k, "" if k == 1 else "s"))
+    if n.get("rpc") and not n.get("at_tip"): return ("warn", "Node still syncing (%s%%) - the gateway serves no work until it reaches the tip. Wait, or take the chain snapshot under Actions to skip most of it." % n.get("progress"))
+    if n["service"] != "active": return ("bad", "The node service is not running. Check Logs, or restart it under Actions.")
+    if g["service"] != "active": return ("bad", "The gateway service is not running. Check Logs, or restart it under Actions.")
+    return ("warn", "Waiting for the node to answer.")
 
 def overview():
-    n, g = node_status(), gw_status(); c = load_conf()
-    if n.get("at_tip") and g["service"] == "active" and g.get("api"):
-        banner = '<div class="banner ok">Mining your own blocks: node at the tip, gateway up, %s rig%s connected.</div>' % (len(g.get("rigs", [])), "" if len(g.get("rigs", [])) == 1 else "s")
-    elif n.get("rpc") and not n.get("at_tip"):
-        banner = '<div class="banner warn">Node still syncing (%s%%) - the gateway serves no work until it reaches the tip. Nothing to do but wait, or take the snapshot under Actions.</div>' % n.get("progress")
-    elif n["service"] != "active":
-        banner = '<div class="banner bad">The node service is not running. Check Logs, or restart it under Actions.</div>'
-    elif g["service"] != "active":
-        banner = '<div class="banner bad">The gateway service is not running. Check Logs, or restart it under Actions.</div>'
-    else:
-        banner = '<div class="banner warn">Waiting for the node to answer.</div>'
-    node = ('<div class=card><h2 style="margin-top:0">Node</h2><div class=kv>'
-            '<b>service</b><span>%s</span><b>chain</b><span>%s</span><b>height</b><span>%s / %s headers</span><b>peers</b><span>%s</span><b>version</b><span class=small>%s</span><b>disk</b><span>%s GB (pruned)</span></div></div>'
-            % (pill(n["service"] == "active", n["service"]),
-               (pill(True, "at tip") if n.get("at_tip") else pill(False, "syncing %s%%" % n.get("progress", "?"), warn=True)) if n.get("rpc") else pill(False, "RPC not answering", warn=True),
-               n.get("height", "-"), n.get("headers", "-"), n.get("peers", "-"), n.get("version", "-"), n.get("size_gb", "-")))
-    gw = ('<div class=card><h2 style="margin-top:0">Gateway</h2><div class=kv>'
-          '<b>service</b><span>%s</span><b>hashrate</b><span class=big>%s TH/s</span><b>rigs</b><span>%s</span><b>shares</b><span>%s accepted, %s rejected</span><b>pool</b><span class=mono>%s</span><b>version</b><span class=small>%s</span></div></div>'
-          % (pill(g["service"] == "active", g["service"]), g.get("hashrate_ths", "-") if g.get("api") else "-", len(g.get("rigs", [])) if g.get("api") else "-",
-             g.get("accepted", "-"), g.get("rejected", "-"), g["pool"], g.get("version", "-")))
+    n, g = node_status(), gw_status(); c = load_conf(); bk, bt = banner_for(n, g)
+    syncing = bool(n.get("rpc") and not n.get("at_tip"))
+    sync = ('<div id=syncwrap%s style="margin-top:10px"><div class=bar><i id=syncbar style="width:%s%%"></i></div><span class="small muted"><span id=syncpct>%s%%</span> of the chain verified</span></div>'
+            % ("" if syncing else " hidden", n.get("progress", 0), n.get("progress", 0)))
+    node = ('<div class=card><h2>Node</h2><div class=kv>'
+            '<b>service</b><span>%s</span><b>chain</b><span>%s</span><b>height</b><span id=n-height>%s / %s headers</span><b>peers</b><span id=n-peers>%s</span><b>version</b><span class=small id=n-version>%s</span><b>disk</b><span id=n-disk>%s GB (pruned)</span></div>%s</div>'
+            % (pill(n["service"] == "active", n["service"], id="n-service"),
+               (pill(True, "at tip", id="n-chain") if n.get("at_tip") else pill(False, "syncing %s%%" % n.get("progress", "?"), warn=True, id="n-chain")) if n.get("rpc") else pill(False, "RPC not answering", warn=True, id="n-chain"),
+               n.get("height", "-"), n.get("headers", "-"), n.get("peers", "-"), n.get("version", "-"), n.get("size_gb", "-"), sync))
+    gw = ('<div class=card><h2>Gateway</h2><div class=kv>'
+          '<b>service</b><span>%s</span><b>hashrate</b><span class=big id=g-hash>%s TH/s</span><b>rigs</b><span id=g-rigs>%s</span><b>shares</b><span id=g-shares>%s accepted, %s rejected</span><b>pool</b><span class=mono>%s</span><b>version</b><span class=small id=g-version>%s</span></div></div>'
+          % (pill(g["service"] == "active", g["service"], id="g-service"), g.get("hashrate_ths", "-") if g.get("api") else "-", len(g.get("rigs", [])) if g.get("api") else "-",
+             g.get("accepted", "-"), g.get("rejected", "-"), esc(g["pool"]), g.get("version", "-")))
     earn = pool_earnings(g["pool"].split(":")[0], g["address"])
-    if earn:
-        if earn.get("in_window"):
-            rows = ("<b>in the payout window</b><span>%s</span><b>share of next block</b><span>%s%%</span><b>hashrate seen by pool</b><span>%s TH/s</span><b>pays if a block is found now</b><span>%s</span><b>blocks paid so far</b><span>%s</span><b>total paid</b><span>%s</span><b>pool fee</b><span>%s%%</span>"
-                    % (pill(earn.get("payable") is not False, "yes" if earn.get("payable") is not False else "unpayable address"), earn.get("share_percent", 0), earn.get("hashrate_ths", 0), earn.get("pays_if_block_now", 0), earn.get("blocks_paid", 0), earn.get("total_paid", 0), earn.get("fee_pct", "")))
-        elif "in_window" in earn:
-            rows = "<b>in the payout window</b><span class=muted>not yet - appears after your first share</span><b>blocks paid so far</b><span>%s</span><b>total paid</b><span>%s</span>" % (earn.get("blocks_paid", 0), earn.get("total_paid", 0))
-        else: rows = "<span class=muted>pool stats not reachable right now</span>"
-        e = '<div class=card><h2 style="margin-top:0">On the pool</h2><div class="kv small">%s</div><p class=note style="margin:10px 0 0"><a href="%s">Your page on the pool &rarr;</a></p></div>' % (rows, esc(earn["_page"]))
+    if earn and earn.get("in_window"):
+        rows = ("<b>in the payout window</b><span>%s</span><b>share of next block</b><span>%s%%</span><b>hashrate seen by pool</b><span>%s TH/s</span><b>pays if a block is found now</b><span>%s</span><b>blocks paid so far</b><span>%s</span><b>total paid</b><span>%s</span><b>pool fee</b><span>%s%%</span>"
+                % (pill(earn.get("payable") is not False, "yes" if earn.get("payable") is not False else "unpayable address"), earn.get("share_percent", 0), earn.get("hashrate_ths", 0), earn.get("pays_if_block_now", 0), earn.get("blocks_paid", 0), earn.get("total_paid", 0), earn.get("fee_pct", "")))
+    elif earn and "in_window" in earn:
+        rows = "<b>in the payout window</b><span class=muted>not yet - appears after your first share</span><b>blocks paid so far</b><span>%s</span><b>total paid</b><span>%s</span>" % (earn.get("blocks_paid", 0), earn.get("total_paid", 0))
+    elif earn: rows = "<span class=muted>pool stats not reachable right now</span>"
+    else: rows = None
+    if rows is not None:
+        e = '<div class=card><h2>On the pool</h2><div class="kv small">%s</div><p class=note style="margin-top:12px"><a href="%s">Your page on the pool &rarr;</a> <span class=muted>(pulled when you open this page; nothing is sent)</span></p></div>' % (rows, esc(earn["_page"]))
     else:
-        e = '<div class=card><h2 style="margin-top:0">On the pool</h2><p class=note>This gateway points at <span class=mono>%s</span>. Earnings are shown on that pool\'s own site.</p></div>' % esc(g["pool"])
-    ident = '<div class=card><h2 style="margin-top:0">This box</h2><div class="kv small"><b>payout address</b><span class=mono>%s</span><b>block name</b><span>%s</span><b>stratum</b><span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span><b>installer</b><span>%s &middot; Xor Desk %s</span></div></div>' % (
-        esc(g["address"]), esc(g["name"]), g["stratum_port"], esc(c.get("installer_tag", "?")), VERSION)
-    return page("Overview", "<h1>Overview</h1>" + banner + '<div class=grid>' + node + gw + e + ident + "</div><p class='note' style='margin-top:14px'>Refreshes every 30 s. Nothing on this page leaves this machine except the pull of your public pool stats when you open it.</p>", "/", refresh=30)
+        e = '<div class=card><h2>On the pool</h2><p class=note>This gateway points at <span class=mono>%s</span>. Earnings are shown on that pool\'s own site.</p></div>' % esc(g["pool"])
+    ident = ('<div class=card><h2>This box</h2><div class="kv small"><b>payout address</b><span class=mono>%s</span><b>block name</b><span>%s</span><b>miners connect to</b><span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span><b>installer</b><span>%s &middot; Xor Desk %s</span></div></div>'
+             % (esc(g["address"]), esc(g["name"]), g["stratum_port"], esc(c.get("installer_tag", "?")), VERSION))
+    body = "<h1>Overview</h1><div class='banner %s' id=banner>%s</div><div class=grid>%s%s%s%s</div><p class='note' style='margin-top:14px'>Values update in place every 15 s. Nothing on this page leaves this machine except the pull of your public pool stats.</p>" % (bk, esc(bt), node, gw, e, ident)
+    return page("Overview", body, "/")
 
 def rigs():
     g = gw_status()
-    if not g.get("api"): body = "<p class=note>The gateway API is not answering (is the gateway running, and is <span class=mono>api.admin_password</span> set in gateway.json?).</p>"
-    elif not g["rigs"]: body = "<p class=note>No rigs connected. Point one at <span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span>, worker <span class=mono>anything.rig1</span>, password <span class=mono>x</span>.</p>" % g["stratum_port"]
+    if not g.get("api"): inner = "<p class=note>The gateway API is not answering (is the gateway running, and is <span class=mono>api.admin_password</span> set in gateway.json?).</p>"
     else:
-        body = "<table><tr><th>Worker</th><th>From</th><th class=num>TH/s</th><th class=num>Accepted</th><th class=num>Rejected</th><th class=num>Diff</th><th class=num>Last share</th><th class=num>Connected</th><th>Agent</th></tr>" + "".join(
-            "<tr><td class=mono>%s%s</td><td class=mono>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%ss ago</td><td class=num>%s min</td><td class=small>%s</td></tr>"
-            % (esc(r["worker"]), ' <span class="pill bad">unpayable</span>' if r["unpayable"] else "", esc(r["host"]), r["hashrate_ths"], esc(r["accepted"]), esc(r["rejected"]), esc(r["vardiff"]), r["last_share_s"], r["connected_min"], esc(r["agent"])) for r in g["rigs"]) + "</table>"
-    return page("Rigs", "<h1>Rigs</h1><div class=card>%s</div><p class=note style='margin-top:12px'>Per-connection counts since each rig connected. A reject rate under 2%% is normal.</p>" % body, "/rigs", refresh=30)
+        rows = "".join("<tr><td class=mono>%s%s</td><td class=mono>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%s</td><td class=num>%ss ago</td><td class=num>%s min</td><td class=small>%s</td></tr>"
+                       % (esc(r["worker"]), ' <span class="pill bad">unpayable</span>' if r["unpayable"] else "", esc(r["host"]), r["hashrate_ths"], esc(r["accepted"]), esc(r["rejected"]), esc(r["vardiff"]), r["last_share_s"], r["connected_min"], esc(r["agent"])) for r in g["rigs"])
+        inner = ("<p class=note id=norigs%s>No rigs connected. Point one at <span class=mono>stratum+tcp://&lt;this machine&gt;:%s</span>, worker <span class=mono>anything.rig1</span>, password <span class=mono>x</span>.</p>"
+                 "<table><thead><tr><th>Worker</th><th>From</th><th class=num>TH/s</th><th class=num>Accepted</th><th class=num>Rejected</th><th class=num>Diff</th><th class=num>Last share</th><th class=num>Connected</th><th>Agent</th></tr></thead><tbody id=rigs>%s</tbody></table>"
+                 % (" hidden" if g["rigs"] else "", g["stratum_port"], rows))
+    return page("Rigs", "<h1>Rigs</h1><div class=card>%s</div><p class=note style='margin-top:12px'>Per-connection counts since each rig connected. A reject rate under 2%% is normal; higher usually means the rig is slow to switch to new work.</p>" % inner, "/rigs")
 
-def valid_address(a):
-    a = a.strip(); CH = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-    def polymod(v):
-        G = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]; c = 1
-        for x in v:
-            b = c >> 25; c = ((c & 0x1ffffff) << 5) ^ x
-            for i in range(5):
-                if (b >> i) & 1: c ^= G[i]
-        return c
-    if a.lower().startswith("bc1"):
-        if a != a.lower() and a != a.upper(): return False
-        a = a.lower(); p = a.rfind("1")
-        if p < 1 or p + 7 > len(a) or a[:p] != "bc": return False
-        data = [CH.find(c) for c in a[p + 1:]]
-        if -1 in data: return False
-        hrp = [ord(c) >> 5 for c in "bc"] + [0] + [ord(c) & 31 for c in "bc"]; pm = polymod(hrp + data); v = data[0]
-        if (v == 0 and pm != 1) or (v > 0 and pm != 0x2bc830a3): return False
-        acc = bits = 0; out = []
-        for d in data[1:-6]:
-            acc = (acc << 5) | d; bits += 5
-            while bits >= 8: bits -= 8; out.append((acc >> bits) & 255)
-        return (v == 0 and len(out) in (20, 32)) or (v == 1 and len(out) == 32)
-    if a[:1] in "13":
-        A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; n = 0
-        for c in a:
-            if c not in A: return False
-            n = n * 58 + A.index(c)
-        raw = b"\0" * (len(a) - len(a.lstrip("1"))) + n.to_bytes((n.bit_length() + 7) // 8, "big")
-        return len(raw) == 25 and raw[0] in (0, 5) and hashlib.sha256(hashlib.sha256(raw[:21]).digest()).digest()[:4] == raw[21:]
-    return False
 def settings(msg=""):
     g = gw_conf(); m = g.get("mining", {}); d = g.get("datum", {})
     body = ('<h1>Settings</h1>%s<div class=card><form class=f method=post action="/settings"><input type=hidden name=csrf value="%s">'
-            '<div><label>Payout address (a wallet you hold the keys to)</label><input type=text name=address value="%s" class=mono></div>'
-            '<div><label>Block name (up to 60 characters, stamped into every block you help find)</label><input type=text name=name value="%s"></div>'
-            '<div><label>DATUM pool endpoint (host:port)</label><input type=text name=pool value="%s:%s" class=mono></div>'
-            '<div><label>Pool public key (only change if you move to another pool)</label><input type=text name=pubkey value="%s" class=mono></div>'
-            '<div><button>Save and restart the gateway</button> <span class=note>Takes effect within a few seconds; rigs reconnect on their own.</span></div></form></div>'
+            '<div><label>Payout address &mdash; a wallet you hold the keys to, never an exchange deposit address</label><input type=text name=address value="%s" class=mono spellcheck=false></div>'
+            '<div><label>Block name &mdash; up to 60 characters, stamped into every block you help find</label><input type=text name=name value="%s"></div>'
+            '<div><label>DATUM pool endpoint (host:port)</label><input type=text name=pool value="%s:%s" class=mono spellcheck=false></div>'
+            '<div><label>Pool public key &mdash; only changes if you move to another pool</label><input type=text name=pubkey value="%s" class=mono spellcheck=false></div>'
+            '<div class=row><button>Save and restart the gateway</button><span class=note>Takes effect within seconds; rigs reconnect on their own.</span></div></form></div>'
             % (msg, csrf(), esc(m.get("pool_address", "")), esc(m.get("coinbase_tag_secondary", "")), esc(d.get("pool_host", "")), esc(d.get("pool_port", "")), esc(d.get("pool_pubkey", ""))))
     return page("Settings", body, "/settings")
 def save_settings(form):
-    addr = (form.get("address") or "").strip(); name = (form.get("name") or "").strip(); pool = (form.get("pool") or "").strip(); pk = (form.get("pubkey") or "").strip()
-    if not valid_address(addr): return settings('<div class="banner bad">That does not look like a valid address.</div>')
+    addr = (form.get("address") or "").strip(); name = (form.get("name") or "").strip(); pool = (form.get("pool") or "").strip(); pk = (form.get("pubkey") or "").strip().lower()
+    if not valid_address(addr): return settings('<div class="banner bad">That is not a valid address on this chain (check every character).</div>')
     if not (0 < len(name) <= 60 and re.match(r"^[A-Za-z0-9 ._-]+$", name)): return settings('<div class="banner bad">Block name: letters, numbers, spaces . _ - only, up to 60 characters.</div>')
     if ":" not in pool: return settings('<div class="banner bad">Pool endpoint must be host:port.</div>')
     host, port = pool.rsplit(":", 1)
@@ -285,20 +286,22 @@ def save_settings(form):
 def actions(msg=""):
     n = node_status(); c = load_conf(); snap = snapshot_info(); latest = latest_release(); running = action_running()
     cur = c.get("installer_tag", "")
-    upd = ('<span class="pill warn">update available: %s</span>' % esc(latest)) if latest and latest != cur else ('<span class="pill ok">up to date (%s)</span>' % esc(cur) if cur else "")
-    snap_line = ""
-    if snap:
-        if n.get("height") and n["height"] >= snap.get("height", 0): snap_line = "<p class=note>Your node (height %s) is already past the published snapshot (%s); nothing to fetch.</p>" % (n["height"], snap["height"])
-        else: snap_line = "<p class=note>Snapshot at height %s, %.1f GB. Replaces this node's chain data with a verified copy so it starts at the tip in minutes.</p>" % (snap["height"], snap.get("size_bytes", 0) / 1e9)
+    if latest and vtuple(latest) > vtuple(cur): upd_pill = '<span class="pill warn">newer release available: %s</span>' % esc(latest); upd_ok = True
+    elif latest: upd_pill = '<span class="pill ok">installed %s is the newest release</span>' % esc(cur); upd_ok = True
+    else: upd_pill = '<span class="pill muted">could not reach GitHub to check</span>'; upd_ok = False
+    behind = bool(snap and n.get("height") is not None and n["height"] < snap.get("height", 0))
+    if snap and behind: snap_txt = "<p>The pool publishes a copy of a fully verified pruned node's chain data (height %s, %.1f GB). This downloads it <b>to this machine</b>, checks its sha256 against the published one, replaces this node's chain data with it and verifies the block hash - so the node is at the tip in minutes instead of syncing for days. Settings, wallet and gateway are untouched.</p>" % (snap["height"], snap.get("size_bytes", 0) / 1e9)
+    elif snap: snap_txt = "<p>The pool's published snapshot is at height %s and this node is at %s - already past it, so there is nothing to fetch. This matters only for a node that is still syncing.</p>" % (snap["height"], n.get("height", "?"))
+    else: snap_txt = "<p class=note>Could not reach the snapshot index right now.</p>"
     dis = " disabled" if running else ""
-    body = ('<h1>Actions</h1>%s<div class=card><h2 style="margin-top:0">Update</h2><p class=note>Re-runs the installer with your saved answers: fetches the current Knots and ratum releases (checksums verified), keeps chain data. %s</p>'
-            '<form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=update><button%s>Update now</button></form></div>'
-            '<div class=card><h2 style="margin-top:0">Chain snapshot</h2>%s<form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=snapshot><button%s>Download and use the snapshot</button></form></div>'
-            '<div class=card><h2 style="margin-top:0">Restart</h2><div class=actions><form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=restart-node><button class=sec%s>Restart node</button></form>'
-            '<form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=restart-gateway><button class=sec%s>Restart gateway</button></form></div></div>'
-            '<div class=card><h2 style="margin-top:0">Action log %s</h2><pre>%s</pre></div>'
-            % (msg, upd, csrf(), dis, snap_line, csrf(), dis, csrf(), dis, csrf(), dis, '<span class="pill warn">running</span>' if running else "", esc(action_log()) or "(nothing yet)"))
-    return page("Actions", body, "/actions", refresh=15 if running else 0)
+    body = ('<h1>Actions</h1>%s<div class=card><h2>Update</h2><p>Fetches the newest installer from GitHub and re-runs it with your saved answers: current Knots and ratum releases, checksums verified; chain data, settings and password are kept.</p>'
+            '<div class=row><form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=update><button data-act=1%s>Update now</button></form>%s<span class=small>installed: <span class=mono>%s</span></span></div></div>'
+            '<div class=card><h2>Chain snapshot</h2>%s<form method=post action="/act" style="margin-top:12px"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=snapshot><button data-act=1%s>Download the snapshot to this machine</button></form></div>'
+            '<div class=card><h2>Restart</h2><div class=row><form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=restart-node><button class=sec data-act=1%s>Restart node</button></form>'
+            '<form method=post action="/act"><input type=hidden name=csrf value="%s"><input type=hidden name=what value=restart-gateway><button class=sec data-act=1%s>Restart gateway</button></form></div></div>'
+            '<div class=card><div class=row style="margin-bottom:8px"><h2 style="margin:0">Action log</h2><span class="pill warn" id=actrun%s>running</span></div><pre id=actlog style="max-height:40vh">%s</pre></div>'
+            % (msg, csrf(), (dis if upd_ok else " disabled data-locked=1"), upd_pill, esc(cur or "?"), snap_txt, csrf(), (dis if behind else " disabled data-locked=1"), csrf(), dis, csrf(), dis, "" if running else " hidden", esc(action_log()) or "(nothing yet)"))
+    return page("Actions", body, "/actions")
 def do_action(form):
     what = form.get("what")
     if action_running(): return actions('<div class="banner warn">An action is already running.</div>')
@@ -311,16 +314,18 @@ def do_action(form):
     elif what == "restart-node": sh("systemctl", "restart", "knotsd"); return actions('<div class="banner ok">Node restarting.</div>')
     elif what == "restart-gateway": sh("systemctl", "restart", "ratum-gateway"); return actions('<div class="banner ok">Gateway restarting.</div>')
     else: return actions('<div class="banner bad">Unknown action.</div>')
-    return actions('<div class="banner ok">Started. This page refreshes while it runs.</div>')
+    return actions('<div class="banner ok">Started - the log below updates as it runs.</div>')
 
+UNITS = {"gateway": "ratum-gateway", "node": "knotsd", "desk": "xordesk", "action": "xordesk-action"}
+def log_text(which):
+    return sh("journalctl", "-u", UNITS.get(which, "ratum-gateway"), "-n", "300", "--no-pager", "-o", "short", timeout=15) or "(empty)"
 def logs(which="gateway"):
-    unit = {"node": "knotsd", "gateway": "ratum-gateway", "desk": "xordesk"}.get(which, "ratum-gateway")
-    out = sh("journalctl", "-u", unit, "-n", "200", "--no-pager", "-o", "short", timeout=15)
-    tabs = " ".join('<a class="btn%s" href="/logs?u=%s">%s</a>' % (" sec" if which != k else "", k, k) for k in ("gateway", "node", "desk"))
-    return page("Logs", "<h1>Logs</h1><div class=actions style='margin-bottom:12px'>%s</div><pre>%s</pre>" % (tabs, esc(out) or "(empty)"), "/logs")
+    which = which if which in UNITS else "gateway"
+    tabs = "".join('<a href="/logs?u=%s"%s>%s</a>' % (k, ' aria-current="page"' if which == k else "", k) for k in UNITS)
+    return page("Logs", "<h1>Logs</h1><div class=tabs>%s</div><pre class=log id=logpre data-u=%s>%s</pre><p class=note style='margin-top:10px'>Last 300 lines; updates in place every 10 s.</p>" % (tabs, which, esc(log_text(which))), "/logs", wide=True)
 
 LOGIN = """<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Xor Desk</title><style>%s
-.box{max-width:380px;margin:12vh auto 0}</style></head><body><main><div class="wrap box"><div class=card><h1 style="margin:0 0 4px">Xor Desk</h1><p class=note style="margin:0 0 14px">Local dashboard for this mining machine.</p>%s
+.box{max-width:400px;margin:12vh auto 0}</style></head><body><main><div class="wrap box"><div class=card><h1 style="margin:0 0 4px">Xor Desk</h1><p class=note style="margin:0 0 14px">Local dashboard for this mining machine.</p>%s
 <form class=f method=post action="/login"><div><label>Password (set by the installer)</label><input type=password name=pw autofocus></div><div><button>Log in</button></div></form></div></div></main></body></html>"""
 
 # ------------------------------------------------------------------ http
@@ -353,8 +358,11 @@ class H(BaseHTTPRequestHandler):
             if p == "/actions": return self.send(actions())
             if p == "/logs": return self.send(logs((qs.get("u") or ["gateway"])[0]))
             if p == "/api/status":
-                d = {"node": node_status(), "gateway": gw_status(), "action_running": action_running()}
-                b = json.dumps(d).encode(); self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
+                n, g = node_status(), gw_status()
+                d = {"node": n, "gateway": g, "banner": banner_for(n, g), "action_running": action_running(), "action_log": action_log() or "(nothing yet)"}
+                b = json.dumps(d).encode(); self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.send_header("Cache-Control", "no-store"); self.end_headers(); return self.wfile.write(b)
+            if p == "/api/log":
+                b = log_text((qs.get("u") or ["gateway"])[0]).encode(); self.send_response(200); self.send_header("Content-Type", "text/plain; charset=utf-8"); self.send_header("Content-Length", str(len(b))); self.send_header("Cache-Control", "no-store"); self.end_headers(); return self.wfile.write(b)
             return self.send(page("Not found", "<h1>Not found</h1>"), 404)
         except Exception as e:
             return self.send(page("Error", "<h1>Something broke</h1><pre>%s</pre>" % esc(e)), 500)
