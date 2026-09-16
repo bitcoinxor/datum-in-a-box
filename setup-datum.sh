@@ -21,7 +21,7 @@ set -euo pipefail
 NONINT=0; WANT_SNAP=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.2.0"
+SETUP_VERSION="v1.2.1"
 KNOTS_VER="29.4.1.knots20260508"
 RATUM_VER="0.1.28"
 POOL_HOST="datum.xorpool.com"

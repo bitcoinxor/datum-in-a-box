@@ -16,7 +16,7 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.2.0"
+$SETUP_VERSION = "v1.2.1"
 $KNOTS_VER  = "29.4.1.knots20260508"
 $RATUM_VER  = "0.1.28"
 $POOL_HOST  = "datum.xorpool.com"; $POOL_PORT = 28915
@@ -184,7 +184,7 @@ $curKnots = ""; if (Test-Path "$BIN\bitcoind.exe") { try { $curKnots = (& "$BIN\
 if ($curKnots -match [regex]::Escape("v$KNOTS_VER")) { Ok "Bitcoin Knots v$KNOTS_VER already installed" }
 else {
   Say "downloading Bitcoin Knots v$KNOTS_VER (~50 MB)..."
-  $kzip = "bitcoin-$KNOTS_VER-win64.zip"; $kurl = "https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
+  $kzip = "bitcoin-$KNOTS_VER-win64-pgpverifiable.zip"; $kurl = "https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
   Download "$kurl/$kzip" "$TMP\$kzip"; Download "$kurl/SHA256SUMS" "$TMP\SHA256SUMS"
   $want = (Select-String -Path "$TMP\SHA256SUMS" -Pattern ("^([0-9a-f]{64})\s+" + [regex]::Escape($kzip) + "$")).Matches
   if (-not $want -or $want.Count -eq 0) { Die "$kzip is not listed in SHA256SUMS" }

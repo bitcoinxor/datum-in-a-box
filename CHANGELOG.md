@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.2.1 — 2026-09-15
+- Windows installer: download the `win64-pgpverifiable.zip` Knots build (Knots publishes no plain `win64.zip`). Found on the first real Windows run.
+
 ## v1.2.0 — 2026-09-15
 - Installer flags `--noninteractive` (answers from /etc/xordesk.json) and `--snapshot`; Xor Desk's Update and Snapshot buttons use them. A failed Xor Desk download no longer fails a node/gateway update.
 - Windows installer `setup-datum.ps1`: same questions and checks, official Windows builds with verified checksums, scheduled tasks that start with Windows, firewall rule for 23334, snapshot via the built-in tar.
