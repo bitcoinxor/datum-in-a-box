@@ -16,7 +16,7 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.2.1"
+$SETUP_VERSION = "v1.2.2"
 $KNOTS_VER  = "29.4.1.knots20260508"
 $RATUM_VER  = "0.1.28"
 $POOL_HOST  = "datum.xorpool.com"; $POOL_PORT = 28915
@@ -95,7 +95,7 @@ function Download([string]$url, [string]$out) {
 }
 function TaskExists($n) { return [bool](Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) }
 function StopTask($n) { if (TaskExists $n) { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue } }
-function NodeCli($args) { & "$BIN\bitcoin-cli.exe" "-datadir=$NODE" "-conf=$NODE_CONF" @args 2>$null }
+function NodeCli { & "$BIN\bitcoin-cli.exe" "-datadir=$NODE" "-conf=$NODE_CONF" @args 2>$null }   # automatic $args - a declared ($args) parameter swallows the arguments and the call returns nothing
 
 # ---------------------------------------------------------------- preflight
 if (-not [Environment]::Is64BitOperatingSystem) { Die "64-bit Windows is required" }
@@ -150,7 +150,7 @@ $doSnapshot = $false; $snap = $null
 try { $snap = Invoke-RestMethod -Uri $SNAPSHOT_URL -TimeoutSec 15 -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" } } catch {}
 if ($snap -and $snap.file) {
   $haveH = 0
-  if ((Test-Path "$NODE\chainstate") -and (Test-Path "$BIN\bitcoin-cli.exe")) { try { $haveH = [int](NodeCli @("getblockcount")) } catch { $haveH = 0 } }
+  if ((Test-Path "$NODE\chainstate") -and (Test-Path "$BIN\bitcoin-cli.exe")) { try { $haveH = [int](NodeCli getblockcount) } catch { $haveH = 0 } }
   if ($haveH -ge [int]$snap.height) { Say ""; Say "Your node is already past the published snapshot (height $haveH); no snapshot needed." }
   elseif ($freeGB -lt 35) { Say ""; Warn "the chain snapshot needs ~35 GB free during install (have $freeGB GB) - skipping it; the node will sync from scratch (1-3 days)" }
   else {
@@ -176,7 +176,7 @@ if (-not (ConfirmNo "Install with these settings?")) { Say "Nothing changed."; e
 Say ""; Say "Installing..."
 foreach ($d in @($ROOT, $BIN, $NODE, $GW, $LOGS, $TMP)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
 StopTask "XorDatum Gateway"; StopTask "XorDatum Node"
-if (Test-Path "$BIN\bitcoin-cli.exe") { try { NodeCli @("stop") | Out-Null; Start-Sleep 5 } catch {} }
+if (Test-Path "$BIN\bitcoin-cli.exe") { try { NodeCli stop | Out-Null; Start-Sleep 5 } catch {} }
 Get-Process bitcoind, ratum-gateway -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 # Knots
@@ -263,12 +263,12 @@ Ok "firewall rule for port $STRATUM_PORT (private networks)"
 # status helper
 @'
 $BIN="C:\XorDatum\bin"; $NODE="C:\XorDatum\node"
-function cli { & "$BIN\bitcoin-cli.exe" "-datadir=$NODE" "-conf=$NODE\bitcoin.conf" @args 2>$null }
+function NodeCli { & "$BIN\bitcoin-cli.exe" "-datadir=$NODE" "-conf=$NODE\bitcoin.conf" @args 2>$null }   # not "cli": that is a built-in alias of Clear-Item and aliases win
 $n = (Get-Process bitcoind -ErrorAction SilentlyContinue) -ne $null; $g = (Get-Process ratum-gateway -ErrorAction SilentlyContinue) -ne $null
 Write-Host ("node:     " + $(if ($n) {"running"} else {"NOT running"}) + "    gateway: " + $(if ($g) {"running"} else {"NOT running"}))
-try { $i = cli getblockchaininfo | ConvertFrom-Json; $p = [math]::Round($i.verificationprogress*100,2)
+try { $i = NodeCli getblockchaininfo | ConvertFrom-Json; $p = [math]::Round($i.verificationprogress*100,2)
   if ($p -gt 99.99) { Write-Host "chain:    height $($i.blocks)  at tip" } else { Write-Host "chain:    height $($i.blocks)  syncing $p%" }
-  Write-Host "peers:    $(cli getconnectioncount)" } catch { Write-Host "chain:    node starting / not answering RPC yet" }
+  Write-Host "peers:    $(NodeCli getconnectioncount)" } catch { Write-Host "chain:    node starting / not answering RPC yet" }
 try { $s = Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3
   Write-Host ("gateway:  {0:N2} TH/s   shares accepted {1}   rejected {2}" -f $s.stratum.hashrate_ths, $s.shares_accepted.count, $s.shares_rejected.count) } catch { Write-Host "gateway:  waiting for the node / not answering yet" }
 Write-Host "log:      C:\XorDatum\logs\gateway.log   node: C:\XorDatum\node\debug.log"
@@ -287,7 +287,7 @@ if ($doSnapshot) {
   Say "verifying checksum..."
   if ((Get-Sha256 $f) -ne $snap.sha256.ToLower()) { Remove-Item $f -Force; Die "snapshot checksum MISMATCH - not using it. Run the script again to re-download." }
   Ok "checksum matches"
-  StopTask "XorDatum Gateway"; try { NodeCli @("stop") | Out-Null } catch {}; StopTask "XorDatum Node"; Start-Sleep 5
+  StopTask "XorDatum Gateway"; try { NodeCli stop | Out-Null } catch {}; StopTask "XorDatum Node"; Start-Sleep 5
   Get-Process bitcoind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   Remove-Item "$NODE\blocks", "$NODE\chainstate" -Recurse -Force -ErrorAction SilentlyContinue
   $tar = "$env:SystemRoot\System32\tar.exe"
@@ -295,13 +295,17 @@ if ($doSnapshot) {
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$NODE\chainstate")) { Die "could not extract the snapshot (this Windows tar may lack zstd support). Re-run the script and answer n to the snapshot; the node will sync from scratch." }
   Remove-Item $f -Force
   Start-ScheduledTask -TaskName "XorDatum Node"; Start-Sleep 3; Start-ScheduledTask -TaskName "XorDatum Gateway"
-  $got = ""; for ($i = 0; $i -lt 90; $i++) { try { $got = (NodeCli @("getblockhash", "$($snap.height)")); if ($got) { break } } catch {}; Start-Sleep 2 }
+  $got = ""; for ($i = 0; $i -lt 90; $i++) { try { $got = (NodeCli getblockhash "$($snap.height)"); if ($got) { break } } catch {}; Start-Sleep 2 }
   if ($got -and $got.Trim() -eq $snap.block_hash) { Ok "node started from the snapshot at height $($snap.height); block hash verified" }
   else { Warn "could not verify block $($snap.height) against the published hash yet (node still starting?) - check later with datum-status" }
 }
 Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
 
-$myip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } | Select-Object -First 1).IPAddress
+# the address on the interface that carries the default route (the real LAN), not a Hyper-V / WSL / VPN adapter
+$myip = $null
+try { $ifi = (Get-NetRoute -DestinationPrefix "0.0.0.0/0" -AddressFamily IPv4 -ErrorAction Stop | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1).InterfaceIndex
+      $myip = (Get-NetIPAddress -InterfaceIndex $ifi -AddressFamily IPv4 -ErrorAction Stop | Select-Object -First 1).IPAddress } catch {}
+if (-not $myip) { $myip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } | Select-Object -First 1).IPAddress }
 Say ""; Write-Host "Done." -ForegroundColor Green; Say ""
 Say "  Point your ASICs at:   stratum+tcp://$($myip):$STRATUM_PORT"
 Say "                         worker:  anything.rig1   password:  x"; Say ""

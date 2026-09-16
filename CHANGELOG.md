@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.2 — 2026-09-15
+- Windows: `datum-status.ps1` and the installer's snapshot check called bitcoin-cli through a helper that returned nothing (`cli` is a built-in alias of Clear-Item; a declared `$args` parameter swallows arguments), so status showed "syncing 0%" and the snapshot block hash could not be verified. Fixed; the hash is verified again after the restore.
+- Windows: "Point your ASICs at" shows the address on the interface with the default route (the real LAN) instead of the first adapter, which on many PCs is a Hyper-V / WSL virtual switch.
+
 ## v1.2.1 — 2026-09-15
 - Windows installer: download the `win64-pgpverifiable.zip` Knots build (Knots publishes no plain `win64.zip`). Found on the first real Windows run.
 

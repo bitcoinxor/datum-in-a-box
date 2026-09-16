@@ -23,7 +23,7 @@ both programs from their official releases with checksums verified, and starts e
 never deletes chain data and can be re-run to update. On a fresh Ubuntu or Debian box:
 
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.2.1/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.2.2/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -40,7 +40,7 @@ if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as admini
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.2.1/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.2.2/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
