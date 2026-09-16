@@ -30,6 +30,23 @@ sudo bash setup-datum.sh
 Prefer to see exactly what happens, or on a different distro? Keep reading — the manual steps are
 the same thing.
 
+## Windows — the same setup on a PC
+
+[`setup-datum.ps1`](setup-datum.ps1) is the Windows version of the installer: Windows 10/11 64-bit,
+the same questions, Bitcoin Knots and ratum-gateway from their official Windows builds (checksums
+verified), installed under `C:\XorDatum`, both running as scheduled tasks that start with Windows
+(no login needed), the one firewall rule for port 23334 on private networks, and the chain snapshot
+if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as administrator** and paste:
+
+```powershell
+cd $env:USERPROFILE\Downloads
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.2.0/setup-datum.ps1 -OutFile setup-datum.ps1
+powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
+```
+
+Check on it any time with `powershell -ExecutionPolicy Bypass -File C:\XorDatum\datum-status.ps1`.
+Keep the PC from sleeping (Settings → System → Power). Xor Desk is Linux-only for now.
+
 ## Xor Desk — a local dashboard for the box (optional)
 
 The installer offers **Xor Desk**: a small web app that runs *on the mining machine* and shows
