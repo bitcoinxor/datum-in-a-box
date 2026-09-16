@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.3.0 — 2026-09-16
+- New: `setup-datum-macos.sh`, the installer for macOS (Apple silicon and Intel). Same questions and checks as the Linux script; official macOS builds of Knots and ratum with verified checksums; launchd system services under `/usr/local/xordatum` that start at boot and stop the node cleanly (180 s ExitTimeOut); optional 'never sleep while plugged in'; snapshot restore when zstd is available. Works on a stock Mac with bash 3.2: no Homebrew, Xcode tools or python required (address validation in perl). Not yet run on a real Mac - first-run reports welcome.
+
 ## v1.2.3 — 2026-09-15
 - Windows: on a re-run the node is asked to shut down and the script waits for it (up to 3 minutes) before anything else. Stopping the scheduled task first killed bitcoind outright, so the next start rewound to the last flushed state and replayed. The finish text now also distinguishes "restarted with existing chain data" from a from-scratch sync.
 

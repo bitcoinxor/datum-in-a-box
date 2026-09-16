@@ -23,7 +23,7 @@ both programs from their official releases with checksums verified, and starts e
 never deletes chain data and can be re-run to update. On a fresh Ubuntu or Debian box:
 
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.2.3/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.3.0/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -40,12 +40,30 @@ if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as admini
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.2.3/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.3.0/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
 Check on it any time with `powershell -ExecutionPolicy Bypass -File C:\XorDatum\datum-status.ps1`.
 Keep the PC from sleeping (Settings → System → Power). Xor Desk is Linux-only for now.
+
+## macOS — the same setup on a Mac
+
+[`setup-datum-macos.sh`](setup-datum-macos.sh) is the Mac version: Apple silicon or Intel, macOS 12 or newer,
+the same questions, Bitcoin Knots and ratum-gateway from their official macOS builds (checksums
+verified), installed under `/usr/local/xordatum`, both running as launchd system services that start
+at boot (no login needed), and an option to stop the Mac from sleeping while plugged in. It needs
+nothing installed first: no Homebrew, no Xcode tools, no python (it uses the perl and shasum that ship
+with macOS). The chain snapshot works if your `tar` can read zstd (recent macOS) or Homebrew's `zstd`
+is installed; otherwise the node syncs from scratch. Open Terminal and paste:
+
+```bash
+curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.3.0/setup-datum-macos.sh
+sudo bash setup-datum-macos.sh
+```
+
+Check on it any time with `datum-status`. If macOS asks whether `bitcoind` or `ratum-gateway` may accept
+incoming connections, allow it: that is your ASICs reaching the gateway. Xor Desk is Linux-only for now.
 
 ## Xor Desk — a local dashboard for the box (optional, beta)
 
