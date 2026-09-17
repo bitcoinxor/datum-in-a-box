@@ -24,7 +24,7 @@
 # =====================================================================================
 set -euo pipefail
 
-SETUP_VERSION="v1.4.0"
+SETUP_VERSION="v1.4.1"
 KNOTS_VER="29.4.1.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -415,9 +415,14 @@ echo "peers:    $($c getconnectioncount 2>/dev/null || echo ?)"
 if [ "$synced" -eq 0 ]; then
   echo "gateway:  waiting for the node to finish syncing (expected - your miners get work automatically once it is at the tip)"
 else
-  curl -s -m 3 http://127.0.0.1:8000/stats.json | perl -MJSON::PP -e 'local $/; my $d = decode_json(<STDIN>); my $h = $d->{hashrate}{history} || [];
-    my $hs = @$h ? $h->[-1][1] : 0; my $c = sub { my $x = shift; ref($x) eq "HASH" ? $x->{count} : ($x // 0) };
-    printf("gateway:  %.2f TH/s   shares accepted %s   rejected %s\n", $hs/1e12, $c->($d->{shares_accepted}), $c->($d->{shares_rejected}))' 2>/dev/null || echo "gateway:  not answering yet"
+  # live smoothed estimate if the API password is readable, else the mean of the last five COMPLETED minutes; never the
+  # newest history point (the minute still in progress), which made a small rig flicker between a number and 0.00
+  P=$(perl -MJSON::PP -e 'local $/; open(my $f,"<","/usr/local/xordatum/gateway/gateway.json") or exit; my $d=decode_json(<$f>); print $d->{api}{admin_password} // ""' 2>/dev/null || true)
+  curl -s -m 3 ${P:+-u "admin:$P"} http://127.0.0.1:8000/stats.json | perl -MJSON::PP -e 'local $/; my $d = decode_json(<STDIN>); my @h = map { $_->[1] } @{ $d->{hashrate}{history} || [] };
+    my @done = @h > 1 ? @h[ (@h > 6 ? @h - 6 : 0) .. $#h - 1 ] : (); my $avg = 0; if (@done) { $avg += $_ for @done; $avg = $avg / @done / 1e12 }
+    my $live = $d->{stratum}{hashrate_ths}; my $ths = (defined $live && $live > 0) ? $live : $avg;
+    my $c = sub { my $x = shift; ref($x) eq "HASH" ? $x->{count} : ($x // 0) };
+    printf("gateway:  %.2f TH/s   shares accepted %s   rejected %s\n", $ths, $c->($d->{shares_accepted}), $c->($d->{shares_rejected}))' 2>/dev/null || echo "gateway:  not answering yet"
   echo "last log: $(tail -1 "$R/logs/gateway.log" 2>/dev/null)"
 fi
 echo "logs:     $R/logs/gateway.log   node: $R/node/debug.log"

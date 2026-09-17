@@ -22,7 +22,7 @@ set -euo pipefail
 NONINT=0; WANT_SNAP=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.4.0"
+SETUP_VERSION="v1.4.1"
 KNOTS_VER="29.4.1.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -482,12 +482,19 @@ echo "peers:    $($c getconnectioncount 2>/dev/null || echo ?)"
 if [ "$synced" -eq 0 ]; then
   echo "gateway:  waiting for the node to finish syncing (expected - your miners get work automatically once it is at the tip)"
 else
-  curl -s -m 3 http://127.0.0.1:8000/stats.json | python3 -c '
+  # Hashrate: the gateway's live smoothed estimate (needs the API password, which root can read from the config),
+  # else the average of the last five COMPLETED minutes. Never the newest history point: that is the minute still in
+  # progress, so a small rig that lands one share a minute flickered between a number and 0.00.
+  P=$(python3 -c 'import json; print(json.load(open("/etc/ratum/gateway.json")).get("api",{}).get("admin_password",""))' 2>/dev/null || true)
+  curl -s -m 3 ${P:+-u "admin:$P"} http://127.0.0.1:8000/stats.json | python3 -c '
 import sys,json
-d=json.load(sys.stdin); h=d.get("hashrate") or {}
-hist=h.get("history") or []; hs=hist[-1][1] if hist and len(hist[-1])>1 else 0
+d=json.load(sys.stdin); st=d.get("stratum") or {}
+hist=[p[1] for p in ((d.get("hashrate") or {}).get("history") or []) if len(p)>1]
+done=hist[-6:-1]; avg=(sum(done)/len(done)/1e12) if done else 0.0
+live=st.get("hashrate_ths"); ths=live if isinstance(live,(int,float)) and live>0 else avg
+rigs=st.get("subscriptions")
 def cnt(x): return x.get("count",x) if isinstance(x,dict) else x
-print("gateway:  %.2f TH/s   shares accepted %s   rejected %s" % (hs/1e12, cnt(d.get("shares_accepted",0)), cnt(d.get("shares_rejected",0))))' 2>/dev/null || echo "gateway:  not answering yet"
+print("gateway:  %.2f TH/s%s   shares accepted %s   rejected %s" % (ths, ("  (%d rig%s)" % (rigs, "" if rigs==1 else "s")) if isinstance(rigs,int) else "", cnt(d.get("shares_accepted",0)), cnt(d.get("shares_rejected",0))))' 2>/dev/null || echo "gateway:  not answering yet"
   echo "last log: $(journalctl -u ratum-gateway -n 1 --no-pager -o cat 2>/dev/null)"
 fi
 EOF

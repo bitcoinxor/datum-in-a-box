@@ -29,7 +29,7 @@ validates its shape, and at the end it tells you plainly whether the pool answer
 or the handshake failed. The Windows and macOS installers ask the same.
 
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.0/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.1/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -46,7 +46,7 @@ if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as admini
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.0/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.1/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -64,7 +64,7 @@ with macOS). The chain snapshot works if your `tar` can read zstd (recent macOS)
 is installed; otherwise the node syncs from scratch. Open Terminal and paste:
 
 ```bash
-curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.0/setup-datum-macos.sh
+curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.1/setup-datum-macos.sh
 sudo bash setup-datum-macos.sh
 ```
 

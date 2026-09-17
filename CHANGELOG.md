@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.4.1 — 2026-09-17
+- `datum-status` showed 0.00 TH/s half the time for small rigs: it read the newest point of the gateway's per-minute history, which is the minute still in progress. It now shows the gateway's live smoothed estimate (and the rig count), falling back to the average of the last five completed minutes. Linux, Windows and macOS.
+
 ## v1.4.0 — 2026-09-17
 - **Any DATUM pool.** Question 3 is now "which pool": 1) Bitcoin Xor (the default, Enter), 2) another DATUM pool, which asks for its `host:port`, its public key (validated as 128 hex characters) and an optional web address. The summary, the fee line and the stats link no longer claim xorpool's terms for another pool. Same in the Linux, Windows and macOS installers; re-runs remember the choice, and `--noninteractive` takes pool, key and address from the gateway config (the file Xor Desk's settings page edits).
 - **Pool handshake check.** After starting, every installer waits for the gateway to report "Connected and Ready" and says so, or says plainly that the handshake failed (wrong host, port or key), instead of assuming success. Tested with a deliberately wrong key.

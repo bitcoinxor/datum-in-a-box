@@ -16,7 +16,7 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.4.0"
+$SETUP_VERSION = "v1.4.1"
 $KNOTS_VER  = "29.4.1.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -315,8 +315,13 @@ Write-Host ("node:     " + $(if ($n) {"running"} else {"NOT running"}) + "    ga
 try { $i = NodeCli getblockchaininfo | ConvertFrom-Json; $p = [math]::Round($i.verificationprogress*100,2)
   if ($p -gt 99.99) { Write-Host "chain:    height $($i.blocks)  at tip" } else { Write-Host "chain:    height $($i.blocks)  syncing $p%" }
   Write-Host "peers:    $(NodeCli getconnectioncount)" } catch { Write-Host "chain:    node starting / not answering RPC yet" }
-try { $s = Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3
-  Write-Host ("gateway:  {0:N2} TH/s   shares accepted {1}   rejected {2}" -f $s.stratum.hashrate_ths, $s.shares_accepted.count, $s.shares_rejected.count) } catch { Write-Host "gateway:  waiting for the node / not answering yet" }
+# live smoothed estimate (needs the API password from the gateway config), else the mean of the last five COMPLETED minutes;
+# never the newest history point, which is the minute still in progress and made a small rig read 0.00 half the time
+try { $hdr = @{}; try { $gp = (Get-Content "C:\XorDatum\gateway\gateway.json" -Raw | ConvertFrom-Json).api.admin_password; if ($gp) { $hdr = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$gp")) } } } catch {}
+  $s = Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3 -Headers $hdr
+  $ths = 0.0; if ($s.stratum -and $s.stratum.hashrate_ths -gt 0) { $ths = [double]$s.stratum.hashrate_ths }
+  else { $hist = @($s.hashrate.history | ForEach-Object { $_[1] }); if ($hist.Count -gt 1) { $from = [Math]::Max(0, $hist.Count - 6); $doneMin = $hist[$from..($hist.Count - 2)]; $ths = (($doneMin | Measure-Object -Average).Average) / 1e12 } }
+  Write-Host ("gateway:  {0:N2} TH/s   shares accepted {1}   rejected {2}" -f $ths, $s.shares_accepted.count, $s.shares_rejected.count) } catch { Write-Host "gateway:  waiting for the node / not answering yet" }
 Write-Host "log:      C:\XorDatum\logs\gateway.log   node: C:\XorDatum\node\debug.log"
 '@ | Set-Content -Path "$ROOT\datum-status.ps1" -Encoding ASCII
 
