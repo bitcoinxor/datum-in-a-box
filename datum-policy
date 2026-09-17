@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# datum-policy - choose what YOUR node relays and what goes into the blocks YOUR gateway builds.
+#
+# Part of DATUM in a box (https://github.com/bitcoinxor/datum-in-a-box). Works on installs made by setup-datum.sh.
+# Your settings live in one file the installer never overwrites:  /var/lib/knots/policy.conf
+#
+#   datum-policy                 what is set now, and the commands
+#   datum-policy options [word]  every option you may set, with the node's own description and default
+#   datum-policy set k=v [...]   set options, then apply
+#   datum-policy unset k [...]   back to the default for those options, then apply
+#   datum-policy edit            open the file in an editor, then apply
+#   datum-policy apply           check the file, restart the node, make sure it still produces work
+#   datum-policy undo            go back to the policy from before the last change, then apply
+#
+# Applying restarts the node. If the node does not come back, or can no longer build a block template, the last policy
+# that worked is put back and the node is restarted again, so a typo cannot leave your miners without work for long.
+set -euo pipefail
+POLICY_VERSION="v1.5.0"
+
+NODE_DIR="${DATUM_NODE_DIR:-/var/lib/knots}"
+NODE_CONF="$NODE_DIR/bitcoin.conf"
+POLICY="$NODE_DIR/policy.conf"
+GOOD="$NODE_DIR/policy.conf.applied"     # the file as of the last apply that worked: the rollback target
+BACKUP="$NODE_DIR/policy.conf.prev"      # the one before that: what "undo" returns to
+REJECTED="$NODE_DIR/policy.conf.rejected"
+SVC="knotsd"; SVC_USER="knots"
+BITCOIND="/usr/local/bin/bitcoind"
+CLI=(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli "-datadir=$NODE_DIR" "-conf=$NODE_CONF")
+GBT_RULES='{"rules":["segwit","blake2b"]}'
+START_WAIT=600     # seconds to wait for the node to answer again (a big mempool takes a while to reload)
+
+# Options outside the node's "relay" and "block creation" help sections that are still safe to tune here.
+EXTRA_OK="maxmempool mempoolexpiry persistmempool dbcache maxconnections maxuploadtarget"
+# Set by the installer in bitcoin.conf; when you set one here, the line there is commented out (the main file would win).
+OVERRIDABLE="maxmempool dbcache"
+
+bold=$'\e[1m'; dim=$'\e[2m'; red=$'\e[31m'; grn=$'\e[32m'; yel=$'\e[33m'; off=$'\e[0m'
+[ -t 1 ] || { bold=""; dim=""; red=""; grn=""; yel=""; off=""; }
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '%sOK%s  %s\n' "$grn" "$off" "$*"; }
+warn() { printf '%sWARNING%s  %s\n' "$yel" "$off" "$*"; }
+die()  { printf '%sERROR%s  %s\n' "$red" "$off" "$*" >&2; exit 1; }
+
+TEMPLATE='# policy.conf - YOUR node'"'"'s policy: what it relays, and what goes into the blocks your gateway builds.
+#
+# This file is yours. The installer never overwrites it. After changing it run:   sudo datum-policy apply
+# Nothing here is required: with nothing set, your node uses the Bitcoin Knots defaults.
+# Policy decides what YOU relay and mine. It cannot loosen the chain'"'"'s consensus rules, only work inside them.
+# Every option, with its description and default:   datum-policy options
+# One option per line, no leading dash, remove the # to switch it on.
+#
+# --- fees ---------------------------------------------------------------------------------------------------
+#blockmintxfee=0.00001      # lowest fee rate (BTC/kvB) a transaction needs to get into YOUR blocks
+#minrelaytxfee=0.00001      # lowest fee rate your node relays and keeps in its mempool
+#
+# --- block size ---------------------------------------------------------------------------------------------
+#blockmaxweight=1200000     # largest block (in weight units) your node will build
+#blockmaxsize=300000        # largest block (in bytes) your node will build
+#
+# --- what counts as spam ------------------------------------------------------------------------------------
+#datacarriersize=83         # most bytes of arbitrary data per transaction (0 = none at all)
+#permitbaremultisig=0       # bare multisig outputs
+#dustrelayfee=0.00003       # outputs cheaper to create than to spend are dust; raise this to refuse more of them
+#
+# --- mempool ------------------------------------------------------------------------------------------------
+#maxmempool=200             # MB of memory for unconfirmed transactions
+#mempoolexpiry=336          # hours an unconfirmed transaction is kept
+'
+
+CAND=""
+HELP_FILE="$(mktemp)"; trap 'rm -f "$HELP_FILE" "$CAND"' EXIT
+
+need_install() {
+  [ -f "$NODE_CONF" ] || die "no node config at $NODE_CONF - this tool is for installs made by setup-datum.sh"
+  [ -x "$BITCOIND" ] || die "$BITCOIND not found"
+}
+
+# ---- what the node binary itself knows ---------------------------------------------------------------------------
+# cached in a file: command substitutions run in subshells, so a variable would never stick
+node_help() { [ -s "$HELP_FILE" ] || "$BITCOIND" -help > "$HELP_FILE" 2>/dev/null || true; cat "$HELP_FILE"; }
+section_opts() {  # names (no dash, no =<arg>) of the options in the given |Section:|Section:| list
+  node_help | awk -v want="$1" '
+    /^[A-Z][A-Za-z\/ ]+:$/ { insec = (index(want, "|" $0 "|") > 0); next }
+    insec && /^  -/ { o=$1; sub(/^-/, "", o); sub(/=.*/, "", o); print o }'
+}
+allowed_opts() {
+  { section_opts "|Node relay options:|Block creation options:|"
+    for o in $EXTRA_OK; do if node_help | grep -q -E "^  -$o(=|$)"; then echo "$o"; fi; done; } | sort -u
+}
+describe_opt() {  # the node's own help paragraph for one option
+  node_help | awk -v o="$1" '
+    /^[A-Z][A-Za-z\/ ]+:$/ { show=0 }
+    /^  -/ { n=$1; sub(/^-/, "", n); sub(/=.*/, "", n); show=(n==o) }
+    show { print }'
+}
+
+# ---- the file ----------------------------------------------------------------------------------------------------
+active_lines() { if [ -f "$1" ]; then sed -e 's/[[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e '/^$/d' "$1"; fi; }
+own() { chown "$SVC_USER:$SVC_USER" "$1" 2>/dev/null || true; chmod 644 "$1"; }
+
+# Make an older install ready: policy.conf exists (the full template replaces the installer's stub) and bitcoin.conf
+# includes it. Whatever the file holds at this point is what the node is running, so it becomes the rollback target.
+INCLUDE_ADDED=0
+init_files() {
+  if [ ! -f "$POLICY" ] || { grep -q '^# datum-in-a-box stub' "$POLICY" && [ -z "$(active_lines "$POLICY")" ]; }; then
+    printf '%s' "$TEMPLATE" > "$POLICY"; own "$POLICY"
+  fi
+  if ! grep -q -E '^[[:space:]]*includeconf=policy\.conf[[:space:]]*$' "$NODE_CONF"; then
+    printf '\n# your own policy settings - see: datum-policy\nincludeconf=policy.conf\n' >> "$NODE_CONF"
+    INCLUDE_ADDED=1
+  fi
+  if [ ! -f "$GOOD" ]; then cp -f "$POLICY" "$GOOD"; own "$GOOD"; fi
+}
+
+check_file() {  # check_file FILE  -> prints problems, returns 1 if any
+  local f="$1" bad=0 allowed line key
+  allowed="$(allowed_opts)"
+  [ -n "$allowed" ] || die "could not read the option list from $BITCOIND -help"
+  while IFS= read -r line; do
+    case "$line" in
+      \[*) say "  ${red}x${off} $line   (sections are not supported here)"; bad=1; continue;;
+      *=*) key="${line%%=*}";;
+      *)   say "  ${red}x${off} $line   (write it as option=value, for example $line=1)"; bad=1; continue;;
+    esac
+    key="${key#-}"
+    case "$key" in *[!a-z0-9]*|"") say "  ${red}x${off} $line   (that is not an option name)"; bad=1; continue;; esac
+    if ! printf '%s\n' "$allowed" | grep -q -x -F "$key"; then
+      if node_help | grep -q -E "^  -$key(=|$)"; then
+        say "  ${red}x${off} $key   (a real option, but not a policy one - this tool only manages relay, block-building and mempool settings)"
+      else
+        say "  ${red}x${off} $key   (this node does not know that option - see: datum-policy options)"
+      fi
+      bad=1
+    fi
+    if [ "$(active_lines "$f" | grep -c -E "^-?$key=" || true)" -gt 1 ]; then
+      say "  ${red}x${off} $key   (set more than once - the node would silently use only the first)"; bad=1
+    fi
+  done < <(active_lines "$f" | awk -F= '!seen[$1]++')
+  return $bad
+}
+
+# the installer sets a few tunables in bitcoin.conf; the main file beats an included one, so hand those over
+handover() {
+  local k
+  for k in $OVERRIDABLE; do
+    if active_lines "$POLICY" | grep -q -E "^-?$k="; then
+      sed -i -E "s|^($k=[^ ]*)[[:space:]]*$|#\1   # now set in policy.conf|" "$NODE_CONF"
+    else
+      sed -i -E "s|^#($k=[^ ]*)   # now set in policy.conf$|\1|" "$NODE_CONF"
+    fi
+  done
+}
+
+# ---- restart and make sure the node still does its job ------------------------------------------------------------
+WHY=""; SYNCING=0; TXS=0
+node_ok() {  # returns 0 healthy, 1 failed (reason in WHY)
+  local t0 n0 n1 out
+  WHY=""; SYNCING=0; TXS=0
+  n0=$(systemctl show "$SVC" -p NRestarts --value 2>/dev/null || echo 0)
+  t0=$(date +%s)
+  systemctl restart "$SVC" || true
+  while :; do
+    sleep 3
+    n1=$(systemctl show "$SVC" -p NRestarts --value 2>/dev/null || echo 0)
+    if [ "$(systemctl is-active "$SVC" 2>/dev/null || true)" = "failed" ] || [ "$((n1 - n0))" -ge 2 ]; then
+      WHY="the node refused to start: $(journalctl -u "$SVC" --since "@$t0" --no-pager -o cat 2>/dev/null | grep -i -m1 -E '^Error|error:' || echo "see journalctl -u $SVC")"
+      return 1
+    fi
+    if out=$("${CLI[@]}" getblockchaininfo 2>&1); then break; fi
+    if [ $(( $(date +%s) - t0 )) -ge "$START_WAIT" ]; then WHY="the node did not answer within $START_WAIT seconds"; return 1; fi
+  done
+  # still syncing: it cannot build a template yet, and that is not the policy file's fault
+  if printf '%s' "$out" | grep -q '"initialblockdownload": true'; then SYNCING=1; return 0; fi
+  t0=$(date +%s)   # a template needs at least one peer; give the node a minute to find one
+  while [ "$("${CLI[@]}" getconnectioncount 2>/dev/null || echo 0)" -lt 1 ] && [ $(( $(date +%s) - t0 )) -lt 60 ]; do sleep 3; done
+  if ! out=$("${CLI[@]}" getblocktemplate "$GBT_RULES" 2>&1); then
+    case "$out" in *"not connected"*|*"initial sync"*|*"is in initial"*|*"downloading blocks"*) SYNCING=1; return 0;; esac
+    WHY="the node started but cannot build a block template: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)"
+    return 1
+  fi
+  TXS=$(printf '%s' "$out" | grep -c '"txid"' || true)
+  return 0
+}
+
+show_active() {
+  local a; a="$(active_lines "$POLICY")"
+  say ""
+  if [ -z "$a" ]; then say "${bold}Your policy:${off} nothing set - your node uses the Bitcoin Knots defaults."
+  else say "${bold}Your policy${off} ($POLICY):"; printf '%s\n' "$a" | sed 's/^/  /'; fi
+}
+
+apply() {
+  local a
+  say "Checking $POLICY ..."
+  check_file "$POLICY" || die "nothing was applied. Fix the lines above (sudo datum-policy edit) and apply again."
+  ok "every option is one this node knows"
+  if [ "$ASSUME_YES" -ne 1 ]; then
+    say ""
+    say "Applying restarts your node. Your miners get no new work while it restarts - usually a minute or two."
+    printf 'Restart the node now? [y/N] '; read -r a </dev/tty || a=""
+    case "$a" in y|Y|yes|YES) ;; *) say "Not applied. The file is saved; run  sudo datum-policy apply  when you are ready."; exit 0;; esac
+  fi
+  handover
+  say "Restarting the node ..."
+  if node_ok; then
+    if ! cmp -s "$POLICY" "$GOOD"; then cp -f "$GOOD" "$BACKUP"; own "$BACKUP"; cp -f "$POLICY" "$GOOD"; own "$GOOD"; fi
+    if [ "$SYNCING" -eq 1 ]; then ok "node restarted with your policy (it is still syncing or has no peers yet, so the block-template check was skipped)"
+    else ok "node restarted with your policy and is building block templates ($TXS transactions in the current one)"; fi
+    show_active
+    return 0
+  fi
+  warn "$WHY"
+  if cmp -s "$POLICY" "$GOOD"; then die "the node is not healthy, and this is the policy that worked before, so the cause is probably elsewhere - check: journalctl -u $SVC -n 50"; fi
+  say "Putting back the last policy that worked ..."
+  cp -f "$POLICY" "$REJECTED"; own "$REJECTED"
+  cp -f "$GOOD" "$POLICY"; own "$POLICY"; handover
+  if node_ok; then die "your change was NOT applied; the node is running with the previous policy again. Your rejected file is kept at $REJECTED"; fi
+  die "the node did not come back even with the previous policy: $WHY  - check: journalctl -u $SVC -n 50"
+}
+
+usage() {
+  say ""
+  say "${bold}Commands${off}"
+  say "  datum-policy options [word]        every option you may set, with its description and default"
+  say "  sudo datum-policy set k=v [...]    set options and apply        e.g. sudo datum-policy set blockmintxfee=0.00002"
+  say "  sudo datum-policy unset k [...]    back to the default and apply"
+  say "  sudo datum-policy edit             edit the file, then apply"
+  say "  sudo datum-policy apply            check the file and restart the node with it"
+  say "  sudo datum-policy undo             go back to the policy from before the last change"
+  say "  add --yes to skip the restart question"
+}
+
+# ---- main --------------------------------------------------------------------------------------------------------
+ASSUME_YES=0; ARGS=()
+for x in "$@"; do case "$x" in --yes|-y) ASSUME_YES=1;; *) ARGS+=("$x");; esac; done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+cmd="${1:-show}"; if [ $# -gt 0 ]; then shift; fi
+
+case "$cmd" in
+  version|--version) say "datum-policy $POLICY_VERSION"; exit 0;;
+  help|-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+  options|list)
+    [ -x "$BITCOIND" ] || die "$BITCOIND not found"
+    say "Options you can set in $POLICY (from this node's own help, $("$BITCOIND" -version | head -1)):"
+    say ""
+    for o in $(allowed_opts); do
+      if [ -n "${1:-}" ] && ! describe_opt "$o" | grep -q -i -- "$1"; then continue; fi
+      describe_opt "$o"
+    done
+    exit 0;;
+  show|status|init|set|unset|edit|apply|undo) ;;
+  *) die "unknown command '$cmd' - see: datum-policy help";;
+esac
+
+# everything below reads or writes the node's files
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 || die "run this as root"
+  if [ "$ASSUME_YES" -eq 1 ]; then exec sudo "$0" "$cmd" "$@" --yes; else exec sudo "$0" "$cmd" "$@"; fi
+fi
+need_install
+
+candidate() { CAND="$(mktemp "$NODE_DIR/.policy.draft.XXXXXX")"; cp -f "$POLICY" "$CAND"; }
+install_candidate() { cp -f "$CAND" "$POLICY"; own "$POLICY"; rm -f "$CAND"; CAND=""; }
+optname() { local k="${1#-}"; k="${k%%=*}"; case "$k" in *[!a-z0-9]*|"") die "'$1' is not an option name";; esac; printf '%s' "$k"; }
+
+case "$cmd" in
+  show|status)
+    init_files
+    if [ "$INCLUDE_ADDED" -eq 1 ]; then say "${dim}(first run: bitcoin.conf now includes policy.conf - it takes effect at the next apply)${off}"; fi
+    show_active; usage;;
+  init)
+    init_files
+    if [ "$INCLUDE_ADDED" -eq 1 ]; then ok "bitcoin.conf now includes policy.conf (takes effect at the next node restart)"; fi
+    ok "$POLICY is ready";;
+  set)
+    init_files
+    [ $# -gt 0 ] || die "usage: sudo datum-policy set option=value [option=value ...]"
+    candidate
+    for kv in "$@"; do
+      kv="${kv#-}"; case "$kv" in *=*) ;; *) die "write it as option=value (got: $kv)";; esac
+      k="$(optname "$kv")"
+      sed -i -E "/^[[:space:]]*-?$k=/d" "$CAND"
+      printf '%s\n' "$kv" >> "$CAND"
+    done
+    check_file "$CAND" || die "nothing was changed."
+    install_candidate; apply;;
+  unset)
+    init_files
+    [ $# -gt 0 ] || die "usage: sudo datum-policy unset option [option ...]"
+    candidate
+    for k in "$@"; do k="$(optname "$k")"; sed -i -E "/^[[:space:]]*-?$k=/d" "$CAND"; done
+    install_candidate; apply;;
+  edit)
+    init_files
+    candidate
+    ED="${EDITOR:-}"; if [ -z "$ED" ]; then if command -v nano >/dev/null 2>&1; then ED=nano; else ED=vi; fi; fi
+    while :; do
+      $ED "$CAND" </dev/tty >/dev/tty   # unquoted on purpose: EDITOR may carry arguments
+      if cmp -s "$CAND" "$POLICY" && cmp -s "$POLICY" "$GOOD" && [ "$INCLUDE_ADDED" -eq 0 ]; then say "No changes."; exit 0; fi
+      if check_file "$CAND"; then break; fi
+      printf 'Press Enter to edit again, or type q to throw the changes away: '; read -r a </dev/tty || a=q
+      if [ "$a" = "q" ]; then say "Discarded. Nothing was changed."; exit 0; fi
+    done
+    install_candidate; apply;;
+  apply) init_files; apply;;
+  undo)
+    init_files
+    [ -f "$BACKUP" ] || die "there is no earlier policy to go back to"
+    cp -f "$BACKUP" "$POLICY"; own "$POLICY"; apply;;
+esac

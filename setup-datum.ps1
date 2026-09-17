@@ -16,7 +16,7 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.4.1"
+$SETUP_VERSION = "v1.5.0"
 $KNOTS_VER  = "29.4.1.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -256,16 +256,36 @@ else {
   Ok ((& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1))
 }
 
-# node config (chain data untouched)
+# node config (chain data untouched). This file is rewritten on every run; the owner's own relay / block-building policy
+# lives in policy.conf, included at the end and never touched again once it exists. The main file beats an included
+# one, so a tunable the owner set there is left commented out here.
 $curl = "$env:SystemRoot\System32\curl.exe"
+$POLICY_CONF = "$NODE\policy.conf"
+if (-not (Test-Path $POLICY_CONF)) {
+@"
+# policy.conf - YOUR node's policy: what it relays, and what goes into the blocks your gateway builds.
+# This file is yours; the installer never overwrites it. One option per line, no leading dash.
+# Nothing here is required: with nothing set, your node uses the Bitcoin Knots defaults.
+# See every option:  "$BIN\bitcoind.exe" -help   (sections "Node relay options" and "Block creation options")
+# After a change, run the installer again: it stops the node cleanly and starts it with your policy.
+# Guide: https://xorpool.com/datum/policy
+#
+#blockmintxfee=0.00001      # lowest fee rate (BTC/kvB) a transaction needs to get into YOUR blocks
+#minrelaytxfee=0.00001      # lowest fee rate your node relays and keeps in its mempool
+#datacarriersize=83         # most bytes of arbitrary data per transaction (0 = none at all)
+"@ | Set-Content -Path $POLICY_CONF -Encoding ASCII
+}
+$policySet = @(Get-Content $POLICY_CONF | ForEach-Object { ($_ -replace '\s*#.*$', '').Trim() } | Where-Object { $_ -match '^-?[a-z0-9]+=' } | ForEach-Object { ($_ -replace '^-', '') -replace '=.*$', '' })
+function Tunable($key, $val) { if ($policySet -contains $key) { "#$key=$val   # now set in policy.conf" } else { "$key=$val" } }
 @"
 # Bitcoin Knots (BLAKE2b fork) - written by setup-datum.ps1 on $(Get-Date -Format yyyy-MM-dd)
+# This file is rewritten by the installer. Your own relay / block policy belongs in policy.conf next to it.
 server=1
 disablewallet=1
 prune=2000
 txindex=0
-dbcache=$(if ($memMB -ge 7000) { 2000 } else { 600 })
-maxmempool=200
+$(Tunable "dbcache" $(if ($memMB -ge 7000) { 2000 } else { 600 }))
+$(Tunable "maxmempool" 200)
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
 rpcuser=knots
@@ -276,6 +296,9 @@ addnode=$PEER1
 addnode=$PEER2
 # Tell the gateway the instant a new block arrives (HTTP notify; Windows has no signals)
 blocknotify=$curl -s -m 3 http://127.0.0.1:8000/NOTIFY
+
+# your own policy settings
+includeconf=policy.conf
 "@ | Set-Content -Path $NODE_CONF -Encoding ASCII
 Ok "node config $NODE_CONF"
 

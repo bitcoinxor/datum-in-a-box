@@ -22,7 +22,7 @@ set -euo pipefail
 NONINT=0; WANT_SNAP=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.4.1"
+SETUP_VERSION="v1.5.0"
 KNOTS_VER="29.4.1.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -41,6 +41,9 @@ NODE_DIR="/var/lib/knots"
 GW_DIR="/etc/ratum"
 GW_CONF="$GW_DIR/gateway.json"
 NODE_CONF="$NODE_DIR/bitcoin.conf"
+POLICY_CONF="$NODE_DIR/policy.conf"   # the owner's own relay / block-building policy: created once, never overwritten
+# where the helper files of this release live (overridable so a release can be tested before its tag exists)
+RAW_BASE="${DATUM_RAW_BASE:-https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION}"
 STRATUM_PORT="23334"
 MIN_DISK_GB=25
 
@@ -356,15 +359,27 @@ else
 fi
 cd /
 
-# node config - the chain data (if any) is untouched
+# node config - the chain data (if any) is untouched. This file is rewritten on every run; the owner's own policy lives in
+# policy.conf, which is included at the end and never touched again once it exists (before v1.5.0 a re-run silently
+# wiped any hand-made policy change). The main file beats an included one, so a tunable the owner set there is left
+# commented out here, in the exact form datum-policy uses, so it can hand the line back later.
+if [ ! -f "$POLICY_CONF" ]; then
+  printf '%s\n' "# datum-in-a-box stub - your node's own policy goes here. Run: datum-policy" > "$POLICY_CONF"
+fi
+chown "$SVC_USER:$SVC_USER" "$POLICY_CONF"; chmod 644 "$POLICY_CONF"
+tunable() {  # tunable KEY VALUE -> the line for bitcoin.conf
+  if sed -e 's/[[:space:]]*#.*$//' -e 's/^[[:space:]]*//' "$POLICY_CONF" | grep -q -E "^-?$1="; then printf '#%s=%s   # now set in policy.conf\n' "$1" "$2"
+  else printf '%s=%s\n' "$1" "$2"; fi
+}
 cat > "$NODE_CONF" <<EOF
 # Bitcoin Knots (BLAKE2b fork) - written by setup-datum.sh on $(date -u +%Y-%m-%d)
+# This file is rewritten by the installer. Your own relay / block policy belongs in policy.conf - see: datum-policy
 server=1
 disablewallet=1
 prune=2000
 txindex=0
-dbcache=$([ "$MEM_MB" -ge 3500 ] && echo 2000 || echo 600)
-maxmempool=200
+$(tunable dbcache "$([ "$MEM_MB" -ge 3500 ] && echo 2000 || echo 600)")
+$(tunable maxmempool 200)
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
 rpcuser=knots
@@ -374,6 +389,9 @@ fixedseeds=0
 addnode=$PEER1
 addnode=$PEER2
 blocknotify=/usr/bin/pkill -USR1 ratum-gateway
+
+# your own policy settings - see: datum-policy
+includeconf=policy.conf
 EOF
 chown "$SVC_USER:$SVC_USER" "$NODE_CONF"; chmod 600 "$NODE_CONF"
 ok "node config $NODE_CONF"
@@ -439,8 +457,8 @@ DESK_PASS=""
 if [ "$DESK" -eq 1 ]; then
   mkdir -p /opt/xordesk /var/log/xordesk
   DESK_OK=1
-  if curl -fsSLo /opt/xordesk/xordesk.py.new "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.py" \
-     && curl -fsSLo /etc/systemd/system/xordesk.service.new "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/xordesk/xordesk.service" \
+  if curl -fsSLo /opt/xordesk/xordesk.py.new "$RAW_BASE/xordesk/xordesk.py" \
+     && curl -fsSLo /etc/systemd/system/xordesk.service.new "$RAW_BASE/xordesk/xordesk.service" \
      && python3 -m py_compile /opt/xordesk/xordesk.py.new; then
     mv -f /opt/xordesk/xordesk.py.new /opt/xordesk/xordesk.py; mv -f /etc/systemd/system/xordesk.service.new /etc/systemd/system/xordesk.service
   else
@@ -499,6 +517,17 @@ print("gateway:  %.2f TH/s%s   shares accepted %s   rejected %s" % (ths, ("  (%d
 fi
 EOF
 chmod 755 /usr/local/bin/datum-status
+
+# datum-policy: the owner's tool for choosing what this node relays and mines (same release as this script)
+if curl -fsSLo /usr/local/bin/datum-policy.new "$RAW_BASE/datum-policy" && bash -n /usr/local/bin/datum-policy.new; then
+  mv -f /usr/local/bin/datum-policy.new /usr/local/bin/datum-policy; chmod 755 /usr/local/bin/datum-policy
+  /usr/local/bin/datum-policy init >/dev/null 2>&1 || true
+  ok "datum-policy (choose what your node relays and mines)"
+else
+  rm -f /usr/local/bin/datum-policy.new
+  if [ -x /usr/local/bin/datum-policy ]; then warn "could not download the datum-policy update; keeping the installed copy"
+  else warn "could not download datum-policy; the node and gateway are unaffected - re-run later to add it"; fi
+fi
 
 systemctl enable --now knotsd >/dev/null 2>&1
 systemctl enable --now ratum-gateway >/dev/null 2>&1
@@ -569,6 +598,7 @@ if [ "$DESK" -eq 1 ]; then
   say ""
 fi
 say "  Check on it any time:  ${bold}datum-status${off}"
+say "  Choose what your node relays and mines:  ${bold}datum-policy${off}   (optional - the defaults are Bitcoin Knots' own)"
 if [ "$IS_XOR" -eq 1 ]; then say "  Your stats once shares flow:  $XOR_URL/miner/$ADDR"
 elif [ -n "$POOL_URL" ]; then say "  Your stats are on your pool's own site:  $POOL_URL"; fi
 say "  Logs:  journalctl -u knotsd -f     journalctl -u ratum-gateway -f"

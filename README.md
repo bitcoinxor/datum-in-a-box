@@ -29,7 +29,7 @@ validates its shape, and at the end it tells you plainly whether the pool answer
 or the handshake failed. The Windows and macOS installers ask the same.
 
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.1/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -46,7 +46,7 @@ if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as admini
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.1/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -64,12 +64,43 @@ with macOS). The chain snapshot works if your `tar` can read zstd (recent macOS)
 is installed; otherwise the node syncs from scratch. Open Terminal and paste:
 
 ```bash
-curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.1/setup-datum-macos.sh
+curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/setup-datum-macos.sh
 sudo bash setup-datum-macos.sh
 ```
 
 Check on it any time with `datum-status`. If macOS asks whether `bitcoind` or `ratum-gateway` may accept
 incoming connections, allow it: that is your ASICs reaching the gateway. Xor Desk is Linux-only for now.
+
+## Your node, your policy — `datum-policy`
+
+The point of running your own gateway is that **your node decides what goes into your blocks**, not the pool. With nothing
+changed your node uses the Bitcoin Knots defaults, and that is a perfectly good place to stay. When you want to choose for
+yourself (a higher minimum fee, stricter limits on data, a different block size) the Linux installer gives you one command:
+
+```bash
+datum-policy                       # what is set now
+datum-policy options               # every option you may set, from your node's own help, with defaults
+datum-policy options fee           # ...only the ones mentioning "fee"
+sudo datum-policy set blockmintxfee=0.00002
+sudo datum-policy unset blockmintxfee
+sudo datum-policy edit             # open the file, then apply
+sudo datum-policy undo             # back to the policy before the last change
+```
+
+Your settings live in `/var/lib/knots/policy.conf`. The installer creates it once and never overwrites it. Applying a change
+restarts the node (your miners get no new work for a minute or two), then checks that the node answers and can still
+build a block template. If it cannot, the last policy that worked is put back automatically.
+
+Policy decides what *you* relay and mine. It works inside the chain's consensus rules and cannot loosen them.
+
+On an install made before v1.5.0 you can add the command without re-running the installer:
+
+```bash
+curl -fsSLo datum-policy https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/datum-policy
+sudo install -m 755 datum-policy /usr/local/bin/ && datum-policy
+```
+
+On macOS and Windows the same `policy.conf` sits next to `bitcoin.conf`; edit it and restart the node as the file describes.
 
 ## Xor Desk — a local dashboard for the box (optional, beta)
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.5.0 — 2026-09-17
+- **Your node, your policy.** New `datum-policy` command (Linux): choose what your node relays and what goes into the blocks your gateway builds. `datum-policy options` lists every relay, block-building and mempool option straight from your node's own help text with its default; `set`, `unset`, `edit`, `apply` and `undo` change them. Every option is checked against the node binary before anything is touched. Applying restarts the node, waits for it to answer and asks it for a block template; if the node refuses to start or cannot build a template, the last policy that worked is put back and the node restarted again, and the rejected file is kept for you to look at. Works on existing installs without re-running the installer: `curl -fsSLo datum-policy https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/datum-policy && sudo install -m 755 datum-policy /usr/local/bin/`.
+- **Fix (all): a re-run no longer wipes hand-made node settings.** Every installer rewrote `bitcoin.conf` from scratch on each run, so a policy change made by hand silently disappeared at the next update. Your settings now live in `policy.conf` next to it, created once and never overwritten; `bitcoin.conf` includes it. The node's main file wins over an included one (checked on the real binary), so when you set `maxmempool` or `dbcache` yourself the installer leaves its own line commented out.
+- macOS and Windows get the same `policy.conf` (edit it, then restart the node: the file says how); the `datum-policy` command itself is Linux only for now.
+- The installer takes `DATUM_RAW_BASE` to fetch its helper files from somewhere other than the release tag, so a release can be tested end to end before the tag exists.
+
 ## v1.4.1 — 2026-09-17
 - `datum-status` showed 0.00 TH/s half the time for small rigs: it read the newest point of the gateway's per-minute history, which is the minute still in progress. It now shows the gateway's live smoothed estimate (and the rig count), falling back to the average of the last five completed minutes. Linux, Windows and macOS.
 

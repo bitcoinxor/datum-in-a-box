@@ -24,7 +24,7 @@
 # =====================================================================================
 set -euo pipefail
 
-SETUP_VERSION="v1.4.1"
+SETUP_VERSION="v1.5.0"
 KNOTS_VER="29.4.1.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -336,15 +336,38 @@ else
 fi
 cd /; rm -rf "$TMP"
 
-# node config - the chain data (if any) is untouched
+# node config - the chain data (if any) is untouched. This file is rewritten on every run; the owner's own relay /
+# block-building policy lives in policy.conf, included at the end and never touched again once it exists. The main file
+# beats an included one, so a tunable the owner set there is left commented out here.
+POLICY_CONF="$NODE_DIR/policy.conf"
+if [ ! -f "$POLICY_CONF" ]; then
+  cat > "$POLICY_CONF" <<'POLICY'
+# policy.conf - YOUR node's policy: what it relays, and what goes into the blocks your gateway builds.
+# This file is yours; the installer never overwrites it. One option per line, no leading dash.
+# Nothing here is required: with nothing set, your node uses the Bitcoin Knots defaults.
+# See every option:  /usr/local/xordatum/bin/bitcoind -help   (sections "Node relay options" and "Block creation options")
+# After a change, restart the node:  sudo launchctl kickstart -k system/com.bitcoinxor.knotsd
+# Guide: https://xorpool.com/datum/policy
+#
+#blockmintxfee=0.00001      # lowest fee rate (BTC/kvB) a transaction needs to get into YOUR blocks
+#minrelaytxfee=0.00001      # lowest fee rate your node relays and keeps in its mempool
+#datacarriersize=83         # most bytes of arbitrary data per transaction (0 = none at all)
+POLICY
+fi
+chmod 644 "$POLICY_CONF"
+tunable() {  # tunable KEY VALUE -> the line for bitcoin.conf
+  if sed -e 's/[[:space:]]*#.*$//' -e 's/^[[:space:]]*//' "$POLICY_CONF" | grep -q -E "^-?$1="; then printf '#%s=%s   # now set in policy.conf\n' "$1" "$2"
+  else printf '%s=%s\n' "$1" "$2"; fi
+}
 cat > "$NODE_CONF" <<EOF
 # Bitcoin Knots (BLAKE2b fork) - written by setup-datum-macos.sh on $(date -u +%Y-%m-%d)
+# This file is rewritten by the installer. Your own relay / block policy belongs in policy.conf next to it.
 server=1
 disablewallet=1
 prune=2000
 txindex=0
-dbcache=$([ "$MEM_MB" -ge 7000 ] && echo 2000 || echo 600)
-maxmempool=200
+$(tunable dbcache "$([ "$MEM_MB" -ge 7000 ] && echo 2000 || echo 600)")
+$(tunable maxmempool 200)
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
 rpcuser=knots
@@ -354,6 +377,9 @@ fixedseeds=0
 addnode=$PEER1
 addnode=$PEER2
 blocknotify=/usr/bin/pkill -USR1 ratum-gateway
+
+# your own policy settings
+includeconf=policy.conf
 EOF
 chmod 600 "$NODE_CONF"
 ok "node config $NODE_CONF"
