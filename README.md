@@ -17,13 +17,19 @@ copy buttons, is at **https://xorpool.com/datum/setup**.
 ## The easy way — one command
 
 [`setup-datum.sh`](setup-datum.sh) does every step below. It asks a few questions (your payout
-address, a name for your blocks, which pool endpoint to use, and whether to download the chain
+address, a name for your blocks, which DATUM pool to work with, and whether to download the chain
 snapshot to skip the initial sync — Enter accepts the defaults), checks the machine, installs
 both programs from their official releases with checksums verified, and starts everything. It
 never deletes chain data and can be re-run to update. On a fresh Ubuntu or Debian box:
 
+**Any DATUM pool.** The pool question defaults to Bitcoin Xor (xorpool.com, 1% fee), but option 2 takes
+any other DATUM pool: its `host:port` and its public key (128 hex characters, published by the pool),
+plus its web address if you like. The gateway checks that key on every connection, so the installer
+validates its shape, and at the end it tells you plainly whether the pool answered and proved its key
+or the handshake failed. The Windows and macOS installers ask the same.
+
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.3.0/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.0/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -40,7 +46,7 @@ if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as admini
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.3.0/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.0/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -58,7 +64,7 @@ with macOS). The chain snapshot works if your `tar` can read zstd (recent macOS)
 is installed; otherwise the node syncs from scratch. Open Terminal and paste:
 
 ```bash
-curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.3.0/setup-datum-macos.sh
+curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.4.0/setup-datum-macos.sh
 sudo bash setup-datum-macos.sh
 ```
 

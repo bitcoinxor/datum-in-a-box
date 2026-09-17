@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.4.0 — 2026-09-17
+- **Any DATUM pool.** Question 3 is now "which pool": 1) Bitcoin Xor (the default, Enter), 2) another DATUM pool, which asks for its `host:port`, its public key (validated as 128 hex characters) and an optional web address. The summary, the fee line and the stats link no longer claim xorpool's terms for another pool. Same in the Linux, Windows and macOS installers; re-runs remember the choice, and `--noninteractive` takes pool, key and address from the gateway config (the file Xor Desk's settings page edits).
+- **Pool handshake check.** After starting, every installer waits for the gateway to report "Connected and Ready" and says so, or says plainly that the handshake failed (wrong host, port or key), instead of assuming success. Tested with a deliberately wrong key.
+- Fix (Linux): a re-run rewrote the gateway config but never restarted a running gateway, so changed answers did not take effect. It restarts it now.
+- Fix (all): a re-run on a machine with less than 25 GB free refused to start even though the node's data was already there; an existing install now needs 5 GB.
+- Fix (all): the gateway's miner-lookup API defaulted to the same port as its main API and logged "Address in use" on every start; it now gets its own local port 8001.
+
 ## v1.3.0 — 2026-09-16
 - New: `setup-datum-macos.sh`, the installer for macOS (Apple silicon and Intel). Same questions and checks as the Linux script; official macOS builds of Knots and ratum with verified checksums; launchd system services under `/usr/local/xordatum` that start at boot and stop the node cleanly (180 s ExitTimeOut); optional 'never sleep while plugged in'; snapshot restore when zstd is available. Works on a stock Mac with bash 3.2: no Homebrew, Xcode tools or python required (address validation in perl). Not yet run on a real Mac - first-run reports welcome.
 

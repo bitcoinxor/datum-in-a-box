@@ -16,12 +16,15 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.3.0"
+$SETUP_VERSION = "v1.4.0"
 $KNOTS_VER  = "29.4.1.knots20260508"
 $RATUM_VER  = "0.1.28"
-$POOL_HOST  = "datum.xorpool.com"; $POOL_PORT = 28915
-$POOL_PUBKEY = "b83aedbba54ba2aa605c76859d97aebd16dece3284402b9fc874778a974da4acbb449f6ccda61625d700036f0487a05f5184f79a07abf2880da77352f4cc487e"
-$POOL_URL   = "https://xorpool.com/datum"
+# The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
+# gateway checks on every connection; host and port only say where to reach it.
+$XOR_HOST   = "datum.xorpool.com"; $XOR_PORT = 28915
+$XOR_PUBKEY = "b83aedbba54ba2aa605c76859d97aebd16dece3284402b9fc874778a974da4acbb449f6ccda61625d700036f0487a05f5184f79a07abf2880da77352f4cc487e"
+$XOR_URL    = "https://xorpool.com/datum"
+$POOL_HOST  = $XOR_HOST; $POOL_PORT = $XOR_PORT; $POOL_PUBKEY = $XOR_PUBKEY; $POOL_URL = $XOR_URL
 $SNAPSHOT_URL = "https://snapshot.xorpool.com/latest.json"
 $PEER1 = "stratum.xorpool.com:18901"; $PEER2 = "datum.xorpool.com:8333"
 
@@ -117,6 +120,7 @@ $drive = (Get-Item ($ROOT.Substring(0, 2) + "\")).PSDrive
 $freeGB = [int]((Get-PSDrive $ROOT.Substring(0, 1)).Free / 1GB)
 $cpus = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 Say "Machine: $cpus CPU, $memMB MB RAM, $freeGB GB free on $($ROOT.Substring(0,2))"
+if (Test-Path "$NODE\chainstate") { $MIN_DISK_GB = 5 }   # the node already holds its ~14 GB; an update only needs working room
 if ($freeGB -lt $MIN_DISK_GB) { Die "need at least $MIN_DISK_GB GB free on $($ROOT.Substring(0,2)) (have $freeGB GB). The pruned node uses ~14 GB plus headroom." }
 if ($memMB -lt 3500) { Warn "less than 4 GB RAM - it works, but the first sync will be slow; Windows manages swap on its own" }
 $UPDATE = (Test-Path $NODE_CONF) -or (Test-Path $GW_CONF)
@@ -124,9 +128,9 @@ $hadChain = Test-Path "$NODE\chainstate"   # chain data from an earlier run - de
 if ($UPDATE) { Say ""; Say "An existing install was found in $ROOT. It will be updated in place: binaries refreshed, configs rewritten from your answers, chain data kept." }
 
 # ---------------------------------------------------------------- questions
-$oldAddr = ""; $oldName = ""; $oldPool = ""; $oldPass = ""; $oldApi = ""
+$oldAddr = ""; $oldName = ""; $oldPool = ""; $oldPass = ""; $oldApi = ""; $oldKey = ""; $oldUrl = ""
 if ($UPDATE -and (Test-Path $GW_CONF)) {
-  try { $g = Get-Content $GW_CONF -Raw | ConvertFrom-Json; $oldAddr = $g.mining.pool_address; $oldName = $g.mining.coinbase_tag_secondary; $oldPool = "$($g.datum.pool_host):$($g.datum.pool_port)"; $oldApi = $g.api.admin_password } catch {}
+  try { $g = Get-Content $GW_CONF -Raw | ConvertFrom-Json; $oldAddr = $g.mining.pool_address; $oldName = $g.mining.coinbase_tag_secondary; $oldPool = "$($g.datum.pool_host):$($g.datum.pool_port)"; $oldApi = $g.api.admin_password; $oldKey = ("" + $g.datum.pool_pubkey).ToLower(); $oldUrl = "" + $g.datum.pool_url } catch {}
 }
 if (Test-Path $NODE_CONF) { $m = Select-String -Path $NODE_CONF -Pattern '^rpcpassword=(.*)$'; if ($m) { $oldPass = $m.Matches[0].Groups[1].Value } }
 
@@ -145,18 +149,50 @@ while ($true) {
   if ($NAME.Length -le 60 -and $NAME -match '^[A-Za-z0-9 ._-]+$') { Ok "tag: $NAME"; break }
   Write-Host "   Keep it to letters, numbers, spaces . _ -  and at most 60 characters." -ForegroundColor Red
 }
-Say ""; Say "3) Which pool endpoint to send shares to. Press Enter for the default. If this PC is in Asia or Europe you can use"
-Say "   hk.datum.xorpool.com:28915 or eu.datum.xorpool.com:28915 instead - same pool, same payout, just closer."
+Say ""; Say "3) Which DATUM pool should this gateway work with?"
+Say "     1) Bitcoin Xor - xorpool.com   (1% fee; the default)"
+Say "     2) Another DATUM pool          (you need its host:port and its public key, from that pool's site)"
+$otherPool = ($oldKey -and $oldKey -ne $XOR_PUBKEY)
 while ($true) {
-  $def = if ($oldPool -and $oldPool -ne ":") { $oldPool } else { "${POOL_HOST}:$POOL_PORT" }
-  $pool = ((Ask "   DATUM pool (host:port)" $def) -replace '\s', '') -replace '^[a-z+]+://', ''
-  if ($pool -match ':') { $h = $pool.Substring(0, $pool.LastIndexOf(':')); $p = $pool.Substring($pool.LastIndexOf(':') + 1) } else { $h = $pool; $p = "$POOL_PORT" }
-  if ($h -match '^[A-Za-z0-9.-]+$' -and $p -match '^\d{1,5}$' -and [int]$p -ge 1 -and [int]$p -le 65535) {
-    try { [System.Net.Dns]::GetHostAddresses($h) | Out-Null; $POOL_HOST = $h; $POOL_PORT = [int]$p; Ok "pool: ${POOL_HOST}:$POOL_PORT"; break }
-    catch { Write-Host "   Cannot resolve host '$h' - check the spelling." -ForegroundColor Red; continue }
-  }
-  Write-Host "   Give it as host:port, e.g. datum.xorpool.com:28915" -ForegroundColor Red
+  $choice = Ask "   Pool" $(if ($otherPool) { "2" } else { "1" })
+  if ($choice -eq "1") { $otherPool = $false; break } elseif ($choice -eq "2") { $otherPool = $true; break }
+  Write-Host "   Type 1 or 2." -ForegroundColor Red
 }
+function AskEndpoint($prompt, $def) {   # sets $script:POOL_HOST / $script:POOL_PORT
+  while ($true) {
+    $ep = ((Ask $prompt $def) -replace '\s', '') -replace '^[a-z+]+://', ''
+    if ($ep -match ':') { $eh = $ep.Substring(0, $ep.LastIndexOf(':')); $epp = $ep.Substring($ep.LastIndexOf(':') + 1) } else { $eh = $ep; $epp = "$XOR_PORT" }
+    if ($eh -match '^[A-Za-z0-9.-]+$' -and $epp -match '^\d{1,5}$' -and [int]$epp -ge 1 -and [int]$epp -le 65535) {
+      try { [System.Net.Dns]::GetHostAddresses($eh) | Out-Null; $script:POOL_HOST = $eh; $script:POOL_PORT = [int]$epp; return }
+      catch { Write-Host "   Cannot resolve host '$eh' - check the spelling." -ForegroundColor Red; continue }
+    }
+    Write-Host "   Give it as host:port, e.g. datum.xorpool.com:28915" -ForegroundColor Red
+  }
+}
+if (-not $otherPool) {
+  Say "   Endpoint: press Enter for the default. In Asia or Europe you can use hk.datum.xorpool.com:28915 or"
+  Say "   eu.datum.xorpool.com:28915 instead - same pool, same payout, just closer."
+  $defEp = if ($oldKey -eq $XOR_PUBKEY -and $oldPool -and $oldPool -ne ":") { $oldPool } else { "${XOR_HOST}:$XOR_PORT" }
+  AskEndpoint "   DATUM pool (host:port)" $defEp
+  $POOL_PUBKEY = $XOR_PUBKEY; $POOL_URL = $XOR_URL; Ok "pool: Bitcoin Xor at ${POOL_HOST}:$POOL_PORT"
+} else {
+  $defEp = if ($oldKey -and $oldKey -ne $XOR_PUBKEY -and $oldPool -ne ":") { $oldPool } else { "" }
+  AskEndpoint "   The pool's DATUM endpoint (host:port)" $defEp
+  Say "   The pool's public key: 128 hex characters, published by the pool. The gateway refuses to talk to anyone who"
+  Say "   cannot prove they hold it, so a wrong key means no mining - paste it exactly."
+  while ($true) {
+    $keyIn = ((Ask "   Pool public key" $(if ($oldKey -and $oldKey -ne $XOR_PUBKEY) { $oldKey } else { "" })) -replace '\s', '').ToLower()
+    if ($keyIn -match '^[0-9a-f]{128}$') { $POOL_PUBKEY = $keyIn; break }
+    Write-Host "   That is not a DATUM public key (need exactly 128 hex characters, got $($keyIn.Length))." -ForegroundColor Red
+  }
+  $defUrl = if ($oldKey -and $oldKey -ne $XOR_PUBKEY) { $oldUrl } else { "" }   # never offer xorpool's address for another pool
+  $urlIn = Read-Host ("   The pool's web address, optional (Enter to skip)" + $(if ($defUrl) { " [$defUrl]" } else { "" }))
+  if (-not $urlIn) { $urlIn = $defUrl }; $urlIn = ("" + $urlIn) -replace '\s', ''
+  if ($urlIn -and $urlIn -notmatch '^https?://[A-Za-z0-9./_:?=&%~-]+$') { Say "   (not a web address - skipping it)"; $urlIn = "" }
+  $POOL_URL = $urlIn
+  Ok ("pool: ${POOL_HOST}:$POOL_PORT  key " + $POOL_PUBKEY.Substring(0, 8) + "..." + $POOL_PUBKEY.Substring(120))
+}
+$isXor = ($POOL_PUBKEY -eq $XOR_PUBKEY)
 
 $doSnapshot = $false; $snap = $null
 try { $snap = Invoke-RestMethod -Uri $SNAPSHOT_URL -TimeoutSec 15 -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" } } catch {}
@@ -177,7 +213,7 @@ $RPC_PASS = if ($oldPass) { $oldPass } else { -join ((48..57 + 65..90 + 97..122)
 $API_PASS = if ($oldApi) { $oldApi } else { -join ((48..57 + 97..102) | Get-Random -Count 32 | ForEach-Object { [char]$_ }) }
 
 Say ""; Say "Summary"
-Say "  Payout address   $ADDR"; Say "  Block tag        Bitcoin Xor / $NAME"; Say "  Pool             ${POOL_HOST}:$POOL_PORT  (1% fee, you build the templates)"
+Say "  Payout address   $ADDR"; Say "  Block tag        Bitcoin Xor / $NAME"; if ($isXor) { Say "  Pool             Bitcoin Xor at ${POOL_HOST}:$POOL_PORT  (1% fee, you build the templates)" } else { Say ("  Pool             ${POOL_HOST}:$POOL_PORT  key " + $POOL_PUBKEY.Substring(0, 8) + "..." + $POOL_PUBKEY.Substring(120) + "  (that pool's own fee and rules apply)") }
 Say "  Install to       $ROOT  (node pruned, ~14 GB, RPC local-only; both programs start with Windows)"
 if ($doSnapshot) { Say "  Snapshot         $($snap.file) -> node starts at height $($snap.height)" }
 Say "  Firewall         allow TCP $STRATUM_PORT inbound on private networks (your ASICs)"
@@ -249,7 +285,7 @@ $cfg = [ordered]@{
   mining   = [ordered]@{ pool_address = $ADDR; coinbase_tag_primary = $NAME; coinbase_tag_secondary = $NAME }
   stratum  = [ordered]@{ listen_addr = "0.0.0.0"; listen_port = $STRATUM_PORT }
   datum    = [ordered]@{ pool_host = $POOL_HOST; pool_port = $POOL_PORT; pool_pubkey = $POOL_PUBKEY; pool_url = $POOL_URL; pool_pass_full_users = $false; pool_pass_workers = $true; gateway_fee_bps = 0; pooled_mining_only = $true }
-  api      = [ordered]@{ listen_addr = "127.0.0.1"; listen_port = 8000; admin_password = $API_PASS }
+  api      = [ordered]@{ listen_addr = "127.0.0.1"; listen_port = 8000; admin_password = $API_PASS; miner_listen_addr = "127.0.0.1"; miner_listen_port = 8001 }   # the miner-lookup API defaults to :8000 too and logs "Address in use"
 }
 $cfg | ConvertTo-Json -Depth 4 | Set-Content -Path $GW_CONF -Encoding ASCII
 Ok "gateway config $GW_CONF"
@@ -284,6 +320,7 @@ try { $s = Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3
 Write-Host "log:      C:\XorDatum\logs\gateway.log   node: C:\XorDatum\node\debug.log"
 '@ | Set-Content -Path "$ROOT\datum-status.ps1" -Encoding ASCII
 
+$logMark = if (Test-Path "$LOGS\gateway.log") { (Get-Item "$LOGS\gateway.log").Length } else { 0 }   # only what the gateway logs from here on counts for the pool-link check
 Start-ScheduledTask -TaskName "XorDatum Node"; Start-Sleep 3; Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 4
 if (-not (Get-Process bitcoind -ErrorAction SilentlyContinue)) { Die "the node did not start - see $NODE\debug.log" }
 if (-not (Get-Process ratum-gateway -ErrorAction SilentlyContinue)) { Die "the gateway did not start - see $LOGS\gateway.log" }
@@ -310,6 +347,22 @@ if ($doSnapshot) {
 }
 Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
 
+# Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
+# port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
+$link = ""
+for ($i = 0; $i -lt 20; $i++) {
+  try { $link = "" + (Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3).status } catch { $link = "" }
+  if ($link -eq "Connected and Ready") { break }; Start-Sleep 2
+}
+$newLog = ""
+try { $fs = [System.IO.File]::Open("$LOGS\gateway.log", 'Open', 'Read', 'ReadWrite'); [void]$fs.Seek([Math]::Min($logMark, $fs.Length), 'Begin'); $sr = New-Object System.IO.StreamReader($fs); $newLog = $sr.ReadToEnd(); $sr.Close(); $fs.Close() } catch {}
+if ($link -eq "Connected and Ready") { Ok "pool link up: ${POOL_HOST}:$POOL_PORT answered and proved its key" }
+elseif ($newLog -match 'DATUM connection ended|DATUM pool is unreachable') {
+  Warn "the gateway cannot complete the handshake with ${POOL_HOST}:$POOL_PORT. Either that host:port is not a DATUM pool,"
+  Say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
+  Say  "         Check the three values with the pool, then run this script again. (gateway log: $LOGS\gateway.log)"
+} else { Say ("  gateway status: " + $(if ($link) { $link } else { "not answering yet" }) + " - normal while the node is still syncing; datum-status shows the pool link later") }
+
 # the address on the interface that carries the default route (the real LAN), not a Hyper-V / WSL / VPN adapter
 $myip = $null
 try { $ifi = (Get-NetRoute -DestinationPrefix "0.0.0.0/0" -AddressFamily IPv4 -ErrorAction Stop | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1).InterfaceIndex
@@ -322,7 +375,7 @@ if ($doSnapshot) { Say "  The node started from the snapshot and is catching up 
 elseif ($hadChain) { Say "  The node restarted with its existing chain data and is catching up whatever it missed - your ASICs get work within minutes." }
 else { Say "  The node is now syncing the chain from the start - 1 to 3 days on a small PC. Your ASICs get work automatically"; Say "  the moment it reaches the tip; until then the gateway waits. Leave the PC on (and not sleeping)." }
 Say ""; Say "  Check on it any time (PowerShell):  powershell -ExecutionPolicy Bypass -File $ROOT\datum-status.ps1"
-Say "  Your stats once shares flow:        $POOL_URL/miner/$ADDR"
+if ($isXor) { Say "  Your stats once shares flow:        $XOR_URL/miner/$ADDR" } elseif ($POOL_URL) { Say "  Your stats are on your pool's own site:  $POOL_URL" }
 Say "  Both programs start with Windows automatically. Power settings: make sure the PC does not sleep."
 Say ""
 & powershell -ExecutionPolicy Bypass -File "$ROOT\datum-status.ps1"

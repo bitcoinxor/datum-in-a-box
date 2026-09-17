@@ -7,7 +7,8 @@
 #     * Bitcoin Knots (BLAKE2b fork) v29.4.1 - pruned full node, RPC local-only
 #     * ratum-gateway 0.1.28            - DATUM gateway your ASICs connect to on :23334
 #     * Xor Desk (optional)             - a local web dashboard for this machine, sends nothing anywhere
-#  and points the gateway at the Bitcoin Xor DATUM pool for the payout split (1% fee).
+#  and points the gateway at a DATUM pool for the payout split: Bitcoin Xor (xorpool.com, 1% fee) by default,
+#  or any other DATUM pool whose host, port and public key you enter.
 #
 #  It asks a few questions, checks the machine, and never deletes a node's data.
 #  Safe to re-run: an existing install is updated in place (your chain data is kept).
@@ -21,13 +22,16 @@ set -euo pipefail
 NONINT=0; WANT_SNAP=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.3.0"
+SETUP_VERSION="v1.4.0"
 KNOTS_VER="29.4.1.knots20260508"
 RATUM_VER="0.1.28"
-POOL_HOST="datum.xorpool.com"
-POOL_PORT="28915"
-POOL_PUBKEY="b83aedbba54ba2aa605c76859d97aebd16dece3284402b9fc874778a974da4acbb449f6ccda61625d700036f0487a05f5184f79a07abf2880da77352f4cc487e"
-POOL_URL="https://xorpool.com/datum"
+# The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
+# gateway checks on every connection; host and port only say where to reach it.
+XOR_HOST="datum.xorpool.com"
+XOR_PORT="28915"
+XOR_PUBKEY="b83aedbba54ba2aa605c76859d97aebd16dece3284402b9fc874778a974da4acbb449f6ccda61625d700036f0487a05f5184f79a07abf2880da77352f4cc487e"
+XOR_URL="https://xorpool.com/datum"
+POOL_HOST="$XOR_HOST"; POOL_PORT="$XOR_PORT"; POOL_PUBKEY="$XOR_PUBKEY"; POOL_URL="$XOR_URL"
 SNAPSHOT_URL="https://snapshot.xorpool.com/latest.json"   # pruned chain snapshot to skip the initial sync
 PEER1="stratum.xorpool.com:18901"
 PEER2="datum.xorpool.com:8333"
@@ -96,6 +100,8 @@ CPUS=$(nproc)
 mkdir -p "$(dirname "$NODE_DIR")"
 DISK_GB=$(df -BG --output=avail "$(dirname "$NODE_DIR")" | tail -1 | tr -dc '0-9')
 say "Machine: ${CPUS} CPU, ${MEM_MB} MB RAM, ${SWAP_MB} MB swap, ${DISK_GB} GB free for the node"
+# an existing node already holds its ~14 GB, so a re-run only needs working room (found on a 40 GB box: the update refused to run)
+[ -d "$NODE_DIR/chainstate" ] && MIN_DISK_GB=5
 [ "$DISK_GB" -ge "$MIN_DISK_GB" ] || die "need at least ${MIN_DISK_GB} GB free under $(dirname "$NODE_DIR") (have ${DISK_GB} GB). The pruned node uses ~14 GB plus headroom."
 [ "$CPUS" -ge 2 ] || warn "only 1 CPU - it works, but the first sync will be slow"
 NEED_SWAP=0
@@ -118,14 +124,17 @@ say "${bold}A few questions${off} (most just need Enter)."
 say ""
 say "1) Your payout address. Every block you help find pays this address straight from the coinbase."
 say "   ${yel}Use a wallet you hold the keys to - NOT an exchange deposit address.${off} Need a wallet? https://xorpool.com/wallet"
-OLD_ADDR=""; OLD_NAME=""; OLD_PASS=""; OLD_POOL=""
+OLD_ADDR=""; OLD_NAME=""; OLD_PASS=""; OLD_POOL=""; OLD_PUBKEY=""; OLD_URL=""
 if [ "$UPDATE" -eq 1 ] && [ -f "$GW_CONF" ] && have python3; then
   OLD_ADDR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mining"].get("pool_address",""))' "$GW_CONF" 2>/dev/null || true)
   OLD_NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mining"].get("coinbase_tag_secondary",""))' "$GW_CONF" 2>/dev/null || true)
   OLD_POOL=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["datum"]; print("%s:%s" % (d.get("pool_host",""), d.get("pool_port","")))' "$GW_CONF" 2>/dev/null || true)
+  OLD_PUBKEY=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["datum"].get("pool_pubkey") or "").lower())' "$GW_CONF" 2>/dev/null || true)
+  OLD_URL=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["datum"].get("pool_url") or "")' "$GW_CONF" 2>/dev/null || true)
 fi
 if [ -f "$NODE_CONF" ]; then OLD_PASS=$(sed -n 's/^rpcpassword=//p' "$NODE_CONF" | head -1); fi
 
+valid_pubkey() { printf '%s' "$1" | LC_ALL=C grep -qE '^[0-9a-f]{128}$'; }   # a DATUM pool key: 64 bytes, lowercase hex
 validate_address() {  # exact checksum validation for bc1q/bc1p (bech32/bech32m) and 1.../3... (base58check)
   python3 - "$1" <<'PY'
 import sys
@@ -175,7 +184,9 @@ if [ "$NONINT" -eq 1 ]; then
 print("ADDR=%s NAME=%s POOL=%s DESK_LISTEN=%s" % (shlex.quote(d.get("address","")), shlex.quote(d.get("name","")), shlex.quote(d.get("pool","")), shlex.quote(d.get("listen","127.0.0.1"))))')"
   validate_address "$ADDR" || die "saved payout address is not valid: $ADDR"
   [ "${#NAME}" -le 60 ] && printf '%s' "$NAME" | LC_ALL=C grep -qE '^[A-Za-z0-9 ._-]+$' || die "saved block name is not valid"
+  [ -n "$OLD_ADDR" ] && ADDR="$OLD_ADDR"; [ -n "$OLD_NAME" ] && NAME="$OLD_NAME"; [ -n "$OLD_POOL" ] && [ "$OLD_POOL" != ":" ] && POOL="$OLD_POOL"
   case "$POOL" in *:*) POOL_HOST="${POOL%%:*}"; POOL_PORT="${POOL##*:}";; esac
+  if valid_pubkey "$OLD_PUBKEY"; then POOL_PUBKEY="$OLD_PUBKEY"; [ "$OLD_PUBKEY" = "$XOR_PUBKEY" ] || POOL_URL="$OLD_URL"; fi
   say ""; say "${bold}Non-interactive run${off} with the saved answers: $ADDR / $NAME / $POOL_HOST:$POOL_PORT"
 fi
 while [ "$NONINT" -eq 0 ]; do
@@ -196,18 +207,51 @@ while [ "$NONINT" -eq 0 ]; do
 done
 
 say ""
-say "3) Which pool endpoint to send shares to. Press Enter for the default. If this machine is in Asia or Europe you can use"
-say "   hk.datum.xorpool.com:28915 or eu.datum.xorpool.com:28915 instead - same pool, same payout, just closer."
+say "3) Which DATUM pool should this gateway work with?"
+say "     1) Bitcoin Xor - xorpool.com   (1% fee; the default)"
+say "     2) Another DATUM pool          (you need its host:port and its public key, from that pool's site)"
+OTHER=0; [ -n "$OLD_PUBKEY" ] && [ "$OLD_PUBKEY" != "$XOR_PUBKEY" ] && OTHER=1
 while [ "$NONINT" -eq 0 ]; do
-  ask POOL "   DATUM pool (host:port)" "${OLD_POOL:-$POOL_HOST:$POOL_PORT}"
-  POOL="${POOL//[[:space:]]/}"; POOL="${POOL#*://}"
-  case "$POOL" in *:*) H="${POOL%%:*}"; P="${POOL##*:}";; *) H="$POOL"; P="$POOL_PORT";; esac
-  if printf '%s' "$H" | LC_ALL=C grep -qE '^[A-Za-z0-9.-]+$' && printf '%s' "$P" | grep -qE '^[0-9]{1,5}$' && [ "$P" -ge 1 ] && [ "$P" -le 65535 ]; then
-    if getent hosts "$H" >/dev/null 2>&1; then POOL_HOST="$H"; POOL_PORT="$P"; ok "pool: $POOL_HOST:$POOL_PORT"; break; fi
-    say "   ${red}Cannot resolve host '$H'${off} - check the spelling."; continue
-  fi
-  say "   ${red}Give it as host:port${off}, e.g. datum.xorpool.com:28915"
+  ask CHOICE "   Pool" "$([ "$OTHER" -eq 1 ] && echo 2 || echo 1)"
+  case "$CHOICE" in 1) OTHER=0; break;; 2) OTHER=1; break;; *) say "   ${red}Type 1 or 2.${off}";; esac
 done
+ask_endpoint() {  # ask_endpoint "prompt" "default host:port" -> sets POOL_HOST / POOL_PORT
+  while :; do
+    ask POOL "$1" "$2"
+    POOL="${POOL//[[:space:]]/}"; POOL="${POOL#*://}"
+    case "$POOL" in *:*) H="${POOL%%:*}"; P="${POOL##*:}";; *) H="$POOL"; P="$XOR_PORT";; esac
+    if printf '%s' "$H" | LC_ALL=C grep -qE '^[A-Za-z0-9.-]+$' && printf '%s' "$P" | grep -qE '^[0-9]{1,5}$' && [ "$P" -ge 1 ] && [ "$P" -le 65535 ]; then
+      if getent hosts "$H" >/dev/null 2>&1; then POOL_HOST="$H"; POOL_PORT="$P"; return; fi
+      say "   ${red}Cannot resolve host '$H'${off} - check the spelling."; continue
+    fi
+    say "   ${red}Give it as host:port${off}, e.g. datum.xorpool.com:28915"
+  done
+}
+if [ "$NONINT" -eq 0 ] && [ "$OTHER" -eq 0 ]; then
+  say "   Endpoint: press Enter for the default. In Asia or Europe you can use hk.datum.xorpool.com:28915 or"
+  say "   eu.datum.xorpool.com:28915 instead - same pool, same payout, just closer."
+  DEF="$XOR_HOST:$XOR_PORT"; [ "$OLD_PUBKEY" = "$XOR_PUBKEY" ] && [ -n "$OLD_POOL" ] && [ "$OLD_POOL" != ":" ] && DEF="$OLD_POOL"
+  ask_endpoint "   DATUM pool (host:port)" "$DEF"
+  POOL_PUBKEY="$XOR_PUBKEY"; POOL_URL="$XOR_URL"; ok "pool: Bitcoin Xor at $POOL_HOST:$POOL_PORT"
+elif [ "$NONINT" -eq 0 ]; then
+  DEF=""; [ "$OLD_PUBKEY" != "$XOR_PUBKEY" ] && [ "$OLD_POOL" != ":" ] && DEF="$OLD_POOL"
+  ask_endpoint "   The pool's DATUM endpoint (host:port)" "$DEF"
+  say "   The pool's public key: 128 hex characters, published by the pool. The gateway refuses to talk to anyone who"
+  say "   cannot prove they hold it, so a wrong key means no mining - paste it exactly."
+  while :; do
+    ask PK "   Pool public key" "$([ "$OLD_PUBKEY" != "$XOR_PUBKEY" ] && echo "$OLD_PUBKEY")"
+    PK="$(printf '%s' "$PK" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+    if valid_pubkey "$PK"; then POOL_PUBKEY="$PK"; break; fi
+    say "   ${red}That is not a DATUM public key${off} (need exactly 128 hex characters, got ${#PK})."
+  done
+  DEFU=""; [ -n "$OLD_PUBKEY" ] && [ "$OLD_PUBKEY" != "$XOR_PUBKEY" ] && DEFU="$OLD_URL"   # never offer xorpool's address for another pool
+  printf '%s' "   The pool's web address, optional (Enter to skip)${DEFU:+ [$DEFU]}: " >&2; readline PU || PU=""
+  PU="${PU:-$DEFU}"; PU="$(printf '%s' "$PU" | tr -d '[:space:]')"
+  if [ -n "$PU" ] && ! printf '%s' "$PU" | LC_ALL=C grep -qE '^https?://[A-Za-z0-9./_:?=&%~-]+$'; then say "   (not a web address - skipping it)"; PU=""; fi
+  POOL_URL="$PU"
+  ok "pool: $POOL_HOST:$POOL_PORT  key ${POOL_PUBKEY:0:8}...${POOL_PUBKEY: -8}"
+fi
+IS_XOR=0; [ "$POOL_PUBKEY" = "$XOR_PUBKEY" ] && IS_XOR=1
 
 SNAP=0; SNAP_H=""; SNAP_HASH=""; SNAP_SHA=""; SNAP_FILE=""; SNAP_SIZE=0
 if latest=$(curl -fsS --max-time 15 "$SNAPSHOT_URL" 2>/dev/null); then
@@ -252,7 +296,8 @@ say ""
 say "${bold}Summary${off}"
 say "  Payout address   $ADDR"
 say "  Block tag        Bitcoin Xor / $NAME"
-say "  Pool             $POOL_HOST:$POOL_PORT  (1% fee, you build the templates)"
+if [ "$IS_XOR" -eq 1 ]; then say "  Pool             Bitcoin Xor at $POOL_HOST:$POOL_PORT  (1% fee, you build the templates)"
+else say "  Pool             $POOL_HOST:$POOL_PORT  key ${POOL_PUBKEY:0:8}...${POOL_PUBKEY: -8}  (that pool's own fee and rules apply)"; fi
 say "  Node             $NODE_DIR  (pruned, ~14 GB, RPC local-only)"
 [ "$SNAP" -eq 1 ] && say "  Snapshot         $SNAP_FILE -> node starts at height $SNAP_H"
 [ "$DESK" -eq 1 ] && say "  Xor Desk         http://$( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo "${MYIP4:-this-machine}" || echo 127.0.0.1 ):8090  (password shown at the end)"
@@ -338,16 +383,16 @@ GW_API_PASS=$(python3 -c 'import json,sys
 try: print(json.load(open(sys.argv[1]))["api"].get("admin_password",""))
 except Exception: print("")' "$GW_CONF" 2>/dev/null)
 [ -n "$GW_API_PASS" ] || GW_API_PASS="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
-python3 - "$GW_CONF" "$RPC_PASS" "$ADDR" "$NAME" "$GW_API_PASS" <<PY
+python3 - "$GW_CONF" "$RPC_PASS" "$ADDR" "$NAME" "$GW_API_PASS" "$POOL_PUBKEY" "$POOL_URL" <<PY
 import json,sys
-p,pw,addr,name,apipw=sys.argv[1:6]
+p,pw,addr,name,apipw,pubkey,url=sys.argv[1:8]
 cfg={
  "bitcoind":{"rpcurl":"http://127.0.0.1:8332","rpcuser":"knots","rpcpassword":pw,"work_update_seconds":40,"notify_fallback":True},
  "mining":{"pool_address":addr,"coinbase_tag_primary":name,"coinbase_tag_secondary":name},
  "stratum":{"listen_addr":"0.0.0.0","listen_port":$STRATUM_PORT},
- "datum":{"pool_host":"$POOL_HOST","pool_port":$POOL_PORT,"pool_pubkey":"$POOL_PUBKEY","pool_url":"$POOL_URL",
+ "datum":{"pool_host":"$POOL_HOST","pool_port":$POOL_PORT,"pool_pubkey":pubkey,"pool_url":url,
           "pool_pass_full_users":False,"pool_pass_workers":True,"gateway_fee_bps":0,"pooled_mining_only":True},
- "api":{"listen_addr":"127.0.0.1","listen_port":8000,"admin_password":apipw}}
+ "api":{"listen_addr":"127.0.0.1","listen_port":8000,"admin_password":apipw,"miner_listen_addr":"127.0.0.1","miner_listen_port":8001}}
 json.dump(cfg,open(p,"w"),indent=2); open(p,"a").write("\n")
 PY
 chown -R "$SVC_USER:$SVC_USER" "$GW_DIR"; chmod 640 "$GW_CONF"
@@ -412,10 +457,10 @@ if [ "$DESK" -eq 1 ] && [ "$DESK_OK" -eq 1 ]; then
   fi
   if [ -n "$OLD_HASH" ]; then SALT="$OLD_SALT"; HASH="$OLD_HASH"
   else DESK_PASS=$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))'); SALT=$(python3 -c 'import secrets; print(secrets.token_hex(8))'); HASH=$(printf '%s%s' "$SALT" "$DESK_PASS" | sha256sum | cut -d' ' -f1); fi
-  python3 - /etc/xordesk.json "$DESK_LISTEN" "$SALT" "$HASH" "$SETUP_VERSION" "$ADDR" "$NAME" "$POOL_HOST:$POOL_PORT" <<PY
+  python3 - /etc/xordesk.json "$DESK_LISTEN" "$SALT" "$HASH" "$SETUP_VERSION" "$ADDR" "$NAME" "$POOL_HOST:$POOL_PORT" "$POOL_PUBKEY" "$POOL_URL" <<PY
 import json,sys
-p,listen,salt,h,tag,addr,name,pool=sys.argv[1:9]
-json.dump({"port":8090,"listen":listen,"salt":salt,"password_sha256":h,"installer_tag":tag,"address":addr,"name":name,"pool":pool},open(p,"w"),indent=2)
+p,listen,salt,h,tag,addr,name,pool,pubkey,url=sys.argv[1:11]
+json.dump({"port":8090,"listen":listen,"salt":salt,"password_sha256":h,"installer_tag":tag,"address":addr,"name":name,"pool":pool,"pool_pubkey":pubkey,"pool_url":url},open(p,"w"),indent=2)
 PY
   chmod 600 /etc/xordesk.json
   systemctl daemon-reload; systemctl enable --now xordesk >/dev/null 2>&1; systemctl restart xordesk
@@ -450,6 +495,9 @@ chmod 755 /usr/local/bin/datum-status
 
 systemctl enable --now knotsd >/dev/null 2>&1
 systemctl enable --now ratum-gateway >/dev/null 2>&1
+# "enable --now" does nothing to a gateway that is already running, so on a re-run the config written above
+# (address, name, pool, key) would never be loaded. Restarting it costs the ASICs a reconnect of a second or two.
+[ "$UPDATE" -eq 1 ] && systemctl restart ratum-gateway
 sleep 4
 systemctl is-active --quiet knotsd || die "the node did not start - see: journalctl -u knotsd -n 50"
 systemctl is-active --quiet ratum-gateway || die "the gateway did not start - see: journalctl -u ratum-gateway -n 50"
@@ -471,6 +519,22 @@ if [ "$SNAP" -eq 1 ]; then
   if [ "${got:-}" = "$SNAP_HASH" ]; then ok "node started from the snapshot at height $SNAP_H; block hash verified"
   else warn "could not verify block $SNAP_H against the published hash yet (node still starting?) - check later with: datum-status"; fi
 fi
+# Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
+# port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
+LINK=""
+for i in $(seq 1 20); do
+  LINK=$(curl -s -m 3 http://127.0.0.1:8000/stats.json | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+  [ "$LINK" = "Connected and Ready" ] && break; sleep 2
+done
+# while it cannot complete the handshake the gateway logs "connecting to DATUM pool" / "DATUM connection ended" in a loop
+LINKFAIL=0; GWLOG=$(journalctl -u ratum-gateway --since "-90s" --no-pager -o cat 2>/dev/null || true)   # into a variable: "journalctl | grep -q" dies of SIGPIPE under pipefail
+case "$GWLOG" in *"DATUM connection ended"*|*"DATUM pool is unreachable"*) LINKFAIL=1;; esac
+if [ "$LINK" = "Connected and Ready" ]; then ok "pool link up: $POOL_HOST:$POOL_PORT answered and proved its key"
+elif [ "$LINKFAIL" -eq 1 ]; then
+  warn "the gateway cannot complete the handshake with $POOL_HOST:$POOL_PORT. Either that host:port is not a DATUM pool,"
+  say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
+  say  "         Check the three values with the pool, then run this script again. (gateway log: journalctl -u ratum-gateway -n 30)"
+else say "  gateway status: ${LINK:-not answering yet} - normal while the node is still syncing; datum-status shows the pool link later"; fi
 trap - EXIT
 MYIP=$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
 
@@ -498,7 +562,8 @@ if [ "$DESK" -eq 1 ]; then
   say ""
 fi
 say "  Check on it any time:  ${bold}datum-status${off}"
-say "  Your stats once shares flow:  $POOL_URL/miner/$ADDR"
+if [ "$IS_XOR" -eq 1 ]; then say "  Your stats once shares flow:  $XOR_URL/miner/$ADDR"
+elif [ -n "$POOL_URL" ]; then say "  Your stats are on your pool's own site:  $POOL_URL"; fi
 say "  Logs:  journalctl -u knotsd -f     journalctl -u ratum-gateway -f"
 say ""
 datum-status || true
