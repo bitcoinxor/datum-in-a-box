@@ -4,7 +4,7 @@
 #
 #  Installs, on this Mac, everything needed to mine on the Bitcoin BLAKE2b chain with
 #  YOUR OWN block templates:
-#     * Bitcoin Knots (BLAKE2b fork) v29.4.1 - pruned full node, RPC local-only
+#     * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
 #     * ratum-gateway 0.1.28            - DATUM gateway your ASICs connect to on :23334
 #  and points the gateway at a DATUM pool for the payout split: Bitcoin Xor (xorpool.com, 1% fee) by default,
 #  or any other DATUM pool whose host, port and public key you enter.
@@ -24,8 +24,8 @@
 # =====================================================================================
 set -euo pipefail
 
-SETUP_VERSION="v1.5.0"
-KNOTS_VER="29.4.1.knots20260508"
+SETUP_VERSION="v1.6.0"
+KNOTS_VER="29.4.2.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.

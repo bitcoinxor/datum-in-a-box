@@ -3,7 +3,7 @@
   Bitcoin Xor - build your own blocks: one-command DATUM setup for Windows
   ---------------------------------------------------------------------------
   Installs, on this PC, everything needed to mine on the Bitcoin BLAKE2b chain with YOUR OWN block templates:
-     * Bitcoin Knots (BLAKE2b fork) v29.4.1 - pruned full node, RPC local-only
+     * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
      * ratum-gateway 0.1.28            - the DATUM gateway your ASICs connect to on port 23334
   and points the gateway at the Bitcoin Xor DATUM pool for the payout split (1% fee).
   Both run as scheduled tasks that start with Windows (no login needed). Nothing is sent anywhere.
@@ -16,8 +16,8 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.5.0"
-$KNOTS_VER  = "29.4.1.knots20260508"
+$SETUP_VERSION = "v1.6.0"
+$KNOTS_VER  = "29.4.2.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.

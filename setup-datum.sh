@@ -4,7 +4,7 @@
 #
 #  Installs, on this machine, everything needed to mine on the Bitcoin BLAKE2b chain with
 #  YOUR OWN block templates:
-#     * Bitcoin Knots (BLAKE2b fork) v29.4.1 - pruned full node, RPC local-only
+#     * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
 #     * ratum-gateway 0.1.28            - DATUM gateway your ASICs connect to on :23334
 #     * Xor Desk (optional)             - a local web dashboard for this machine, sends nothing anywhere
 #  and points the gateway at a DATUM pool for the payout split: Bitcoin Xor (xorpool.com, 1% fee) by default,
@@ -22,8 +22,8 @@ set -euo pipefail
 NONINT=0; WANT_SNAP=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.5.0"
-KNOTS_VER="29.4.1.knots20260508"
+SETUP_VERSION="v1.6.0"
+KNOTS_VER="29.4.2.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
@@ -113,7 +113,7 @@ if [ "$MEM_MB" -lt 3500 ] && [ "$SWAP_MB" -lt 1500 ]; then
   NEED_SWAP=1
 fi
 
-UPDATE=0
+UPDATE=0; KNOTS_NEW=0
 if [ -f "$NODE_CONF" ] || [ -f "$GW_CONF" ]; then
   UPDATE=1
   say ""
@@ -333,6 +333,7 @@ KTAR="bitcoin-$KNOTS_VER-$KNOTS_ARCH.tar.gz"
 if [ "$(/usr/local/bin/bitcoind --version 2>/dev/null | head -1 | grep -o 'v[0-9.]*knots[0-9]*' || true)" = "v$KNOTS_VER" ]; then
   ok "Bitcoin Knots v$KNOTS_VER already installed"
 else
+  KNOTS_NEW=1
   say "downloading Bitcoin Knots v$KNOTS_VER (~55 MB)..."
   curl -fsSLo "$KTAR" "$KURL/$KTAR" || die "download failed: $KURL/$KTAR"
   curl -fsSLo SHA256SUMS "$KURL/SHA256SUMS" || die "download failed: SHA256SUMS"
@@ -530,6 +531,16 @@ else
 fi
 
 systemctl enable --now knotsd >/dev/null 2>&1
+# "enable --now" does nothing to a node that is already running, so after a node update the old version would
+# keep running from memory. Restart it onto the new binary and wait for it to answer; the gateway keeps the
+# ASICs on their current work meanwhile.
+if [ "$UPDATE" -eq 1 ] && [ "$KNOTS_NEW" -eq 1 ]; then
+  say "restarting the node onto Bitcoin Knots v$KNOTS_VER..."
+  systemctl restart knotsd
+  for i in $(seq 1 150); do sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getblockcount >/dev/null 2>&1 && break; sleep 2; done
+  RUNNING_VER=$(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getnetworkinfo 2>/dev/null | grep -o 'Knots:[0-9a-z]*' || true)
+  if [ -n "$RUNNING_VER" ]; then ok "node restarted on v$KNOTS_VER"; else warn "the node has not answered yet after its update - check in a few minutes with: datum-status"; fi
+fi
 systemctl enable --now ratum-gateway >/dev/null 2>&1
 # "enable --now" does nothing to a gateway that is already running, so on a re-run the config written above
 # (address, name, pool, key) would never be loaded. Restarting it costs the ASICs a reconnect of a second or two.

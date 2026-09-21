@@ -29,7 +29,7 @@ validates its shape, and at the end it tells you plainly whether the pool answer
 or the handshake failed. The Windows and macOS installers ask the same.
 
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.6.0/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -46,7 +46,7 @@ if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as admini
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.6.0/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -64,7 +64,7 @@ with macOS). The chain snapshot works if your `tar` can read zstd (recent macOS)
 is installed; otherwise the node syncs from scratch. Open Terminal and paste:
 
 ```bash
-curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.5.0/setup-datum-macos.sh
+curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.6.0/setup-datum-macos.sh
 sudo bash setup-datum-macos.sh
 ```
 
@@ -142,19 +142,19 @@ machine itself.
 
 ## 2 · Install Bitcoin Knots (BLAKE2b fork)
 
-The chain runs on **Bitcoin Knots v29.4.1.knots20260508** — use that exact release from
-[github.com/bitcoinknots/bitcoin/releases](https://github.com/bitcoinknots/bitcoin/releases/tag/v29.4.1.knots20260508).
+The chain runs on **Bitcoin Knots v29.4.2.knots20260508** — use that exact release from
+[github.com/bitcoinknots/bitcoin/releases](https://github.com/bitcoinknots/bitcoin/releases/tag/v29.4.2.knots20260508).
 Older builds don't know the fork's proof of work.
 
 ```sh
 cd /tmp
-V=29.4.1.knots20260508; A=$(uname -m | sed 's/x86_64/x86_64-linux-gnu/; s/aarch64/aarch64-linux-gnu/')
+V=29.4.2.knots20260508; A=$(uname -m | sed 's/x86_64/x86_64-linux-gnu/; s/aarch64/aarch64-linux-gnu/')
 curl -LO https://github.com/bitcoinknots/bitcoin/releases/download/v$V/bitcoin-$V-$A.tar.gz
 curl -LO https://github.com/bitcoinknots/bitcoin/releases/download/v$V/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS          # must print: bitcoin-...tar.gz: OK
 tar xzf bitcoin-$V-$A.tar.gz
 sudo install -m 755 bitcoin-$V/bin/bitcoind bitcoin-$V/bin/bitcoin-cli /usr/local/bin/
-bitcoind --version | head -1                        # Bitcoin Knots daemon version v29.4.1.knots20260508
+bitcoind --version | head -1                        # Bitcoin Knots daemon version v29.4.2.knots20260508
 ```
 
 ## 3 · Configure and sync the node
