@@ -20,9 +20,15 @@ param([string]$ExistingNode = "")
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.7.1"
+$SETUP_VERSION = "v1.7.2"
 $KNOTS_VER  = "29.4.2.knots20260508"
 $RATUM_VER  = "0.1.28"
+# The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
+# pinned here, so a download from anywhere (GitHub, or our mirror when GitHub is unreachable) is checked against the
+# authors' values, not against whatever sits next to the file. Update both when bumping a version.
+$KNOTS_SHA256 = "8fa3445a0f3ecc7d1f9e4f4778e44c786883437ac781902a38135be5ea0a892b"   # bitcoin-29.4.2.knots20260508-win64-pgpverifiable.zip
+$RATUM_SHA256 = "0ccbbbfb2bec452243d72a04f61e8a931a316e3e720ebd3f228d313ee5cef63a"   # ratum-gateway-0.1.28-x86_64-windows.zip
+$MIRROR = "https://snapshot.xorpool.com/mirror"   # same files, for networks where GitHub's release downloads fail (China)
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
 $XOR_HOST   = "datum.xorpool.com"; $XOR_PORT = 28915
@@ -97,8 +103,13 @@ function Test-Address([string]$a) {
 
 function Get-Sha256([string]$path) { (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLower() }
 function Download([string]$url, [string]$out) {
-  try { Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" } }
-  catch { Die "download failed: $url ($($_.Exception.Message))" }
+  try { Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; return }
+  catch { $first = $_.Exception.Message }
+  if ($url -like "https://github.com/*") {   # GitHub's release downloads often fail from China: same file from our mirror, same pinned checksum
+    $alt = "$MIRROR/" + ($url.Split('/')[-1]); Warn "GitHub download failed ($first); trying the mirror $alt"
+    try { Invoke-WebRequest -Uri $alt -OutFile $out -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; return } catch { $first = $_.Exception.Message }
+  }
+  Die "download failed: $url ($first)"
 }
 function TaskExists($n) { return [bool](Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) }
 function StopTask($n) { if (TaskExists $n) { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue } }
@@ -288,6 +299,9 @@ if ($doSnapshot) { Say "  Snapshot         $($snap.file) -> node starts at heigh
 Say "  Firewall         allow TCP $STRATUM_PORT inbound on private networks (your ASICs)"
 Say ""
 if (-not (ConfirmNo "Install with these settings?")) { Say "Nothing changed."; exit 0 }
+New-Item -ItemType Directory -Force -Path $GW | Out-Null; $cfg0 = [ordered]@{ mining = [ordered]@{ pool_address = $ADDR; coinbase_tag_primary = $NAME; coinbase_tag_secondary = $NAME }
+  datum = [ordered]@{ pool_host = $POOL_HOST; pool_port = $POOL_PORT; pool_pubkey = $POOL_PUBKEY; pool_url = $POOL_URL }; api = [ordered]@{ admin_password = $API_PASS } }
+if (-not (Test-Path $GW_CONF)) { $cfg0 | ConvertTo-Json -Depth 4 | Set-Content -Path $GW_CONF -Encoding ASCII }   # answers on disk before any download: a re-run offers them as defaults
 
 # ---------------------------------------------------------------- install
 Say ""; Say "Installing..."
@@ -305,10 +319,8 @@ elseif ($curKnots -match [regex]::Escape("v$KNOTS_VER")) { Ok "Bitcoin Knots v$K
 else {
   Say "downloading Bitcoin Knots v$KNOTS_VER (~50 MB)..."
   $kzip = "bitcoin-$KNOTS_VER-win64-pgpverifiable.zip"; $kurl = "https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
-  Download "$kurl/$kzip" "$TMP\$kzip"; Download "$kurl/SHA256SUMS" "$TMP\SHA256SUMS"
-  $want = (Select-String -Path "$TMP\SHA256SUMS" -Pattern ("^([0-9a-f]{64})\s+" + [regex]::Escape($kzip) + "$")).Matches
-  if (-not $want -or $want.Count -eq 0) { Die "$kzip is not listed in SHA256SUMS" }
-  if ((Get-Sha256 "$TMP\$kzip") -ne $want[0].Groups[1].Value.ToLower()) { Remove-Item "$TMP\$kzip" -Force; Die "checksum MISMATCH on $kzip - not installing it" }
+  Download "$kurl/$kzip" "$TMP\$kzip"
+  if ((Get-Sha256 "$TMP\$kzip") -ne $KNOTS_SHA256) { Remove-Item "$TMP\$kzip" -Force; Die "checksum MISMATCH on $kzip - not installing it" }
   Expand-Archive -Path "$TMP\$kzip" -DestinationPath "$TMP\knots" -Force
   $src = Get-ChildItem "$TMP\knots" -Recurse -Filter bitcoind.exe | Select-Object -First 1
   Copy-Item $src.FullName "$BIN\bitcoind.exe" -Force; Copy-Item (Join-Path $src.DirectoryName "bitcoin-cli.exe") "$BIN\bitcoin-cli.exe" -Force
@@ -320,9 +332,8 @@ if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already inst
 else {
   Say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
   $rzip = "ratum-gateway-$RATUM_VER-x86_64-windows.zip"; $rurl = "https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
-  Download "$rurl/$rzip" "$TMP\$rzip"; Download "$rurl/$rzip.sha256" "$TMP\$rzip.sha256"
-  $want = ((Get-Content "$TMP\$rzip.sha256" -Raw) -split '\s+')[0].ToLower()
-  if ((Get-Sha256 "$TMP\$rzip") -ne $want) { Remove-Item "$TMP\$rzip" -Force; Die "checksum MISMATCH on $rzip - not installing it" }
+  Download "$rurl/$rzip" "$TMP\$rzip"
+  if ((Get-Sha256 "$TMP\$rzip") -ne $RATUM_SHA256) { Remove-Item "$TMP\$rzip" -Force; Die "checksum MISMATCH on $rzip - not installing it" }
   Expand-Archive -Path "$TMP\$rzip" -DestinationPath "$TMP\ratum" -Force
   $src = Get-ChildItem "$TMP\ratum" -Recurse -Filter ratum-gateway.exe | Select-Object -First 1
   if (-not $src) { Die "ratum-gateway.exe not found in the archive" }
@@ -412,18 +423,22 @@ includeconf=policy.conf
 Ok "node config $NODE_CONF"
 }
 
-# gateway config
-$cfg = [ordered]@{
-  bitcoind = $(if (-not $EXT) { [ordered]@{ rpcurl = "http://127.0.0.1:8332"; rpcuser = "knots"; rpcpassword = $RPC_PASS; work_update_seconds = 40; notify_fallback = $true } }
-              elseif ($extPass) { [ordered]@{ rpcurl = "http://127.0.0.1:$rpcPort"; rpcuser = $extUser; rpcpassword = $extPass; work_update_seconds = 40; notify_fallback = $true } }
-              else { [ordered]@{ rpcurl = "http://127.0.0.1:$rpcPort"; rpccookiefile = "$EXT_DIR\.cookie"; work_update_seconds = 40; notify_fallback = $true } })
-  mining   = [ordered]@{ pool_address = $ADDR; coinbase_tag_primary = $NAME; coinbase_tag_secondary = $NAME }
-  stratum  = [ordered]@{ listen_addr = "0.0.0.0"; listen_port = $STRATUM_PORT }
-  datum    = [ordered]@{ pool_host = $POOL_HOST; pool_port = $POOL_PORT; pool_pubkey = $POOL_PUBKEY; pool_url = $POOL_URL; pool_pass_full_users = $false; pool_pass_workers = $true; gateway_fee_bps = 0; pooled_mining_only = $true }
-  api      = [ordered]@{ listen_addr = "127.0.0.1"; listen_port = 8000; admin_password = $API_PASS; miner_listen_addr = "127.0.0.1"; miner_listen_port = 8001 }   # the miner-lookup API defaults to :8000 too and logs "Address in use"
+# gateway config. Written twice: right after the confirm, so a re-run offers these answers as defaults even if a download
+# fails a moment later, and again at the end once the node login details are known.
+function WriteGatewayConfig {
+  $cfg = [ordered]@{
+    bitcoind = $(if (-not $EXT) { [ordered]@{ rpcurl = "http://127.0.0.1:8332"; rpcuser = "knots"; rpcpassword = $RPC_PASS; work_update_seconds = 40; notify_fallback = $true } }
+                elseif ($extPass) { [ordered]@{ rpcurl = "http://127.0.0.1:$rpcPort"; rpcuser = $extUser; rpcpassword = $extPass; work_update_seconds = 40; notify_fallback = $true } }
+                else { [ordered]@{ rpcurl = "http://127.0.0.1:$rpcPort"; rpccookiefile = "$EXT_DIR\.cookie"; work_update_seconds = 40; notify_fallback = $true } })
+    mining   = [ordered]@{ pool_address = $ADDR; coinbase_tag_primary = $NAME; coinbase_tag_secondary = $NAME }
+    stratum  = [ordered]@{ listen_addr = "0.0.0.0"; listen_port = $STRATUM_PORT }
+    datum    = [ordered]@{ pool_host = $POOL_HOST; pool_port = $POOL_PORT; pool_pubkey = $POOL_PUBKEY; pool_url = $POOL_URL; pool_pass_full_users = $false; pool_pass_workers = $true; gateway_fee_bps = 0; pooled_mining_only = $true }
+    api      = [ordered]@{ listen_addr = "127.0.0.1"; listen_port = 8000; admin_password = $API_PASS; miner_listen_addr = "127.0.0.1"; miner_listen_port = 8001 }   # the miner-lookup API defaults to :8000 too and logs "Address in use"
+  }
+  $cfg | ConvertTo-Json -Depth 4 | Set-Content -Path $GW_CONF -Encoding ASCII
+  Ok "gateway config $GW_CONF"
 }
-$cfg | ConvertTo-Json -Depth 4 | Set-Content -Path $GW_CONF -Encoding ASCII
-Ok "gateway config $GW_CONF"
+WriteGatewayConfig
 
 # scheduled tasks: start with Windows as SYSTEM, restart if they die; gateway output to a log file
 $sysPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest

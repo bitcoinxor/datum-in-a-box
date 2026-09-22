@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.7.2 — 2026-09-21
+- Windows: GitHub's release downloads fail often from China ("unable to connect to the remote server", seen on the first Windows 10 run). The two Windows builds are now also on our own storage (`snapshot.xorpool.com/mirror/`), used only when GitHub fails, and both files' checksums are pinned in the script from the projects' own SHA256SUMS / `.sha256`, so a download from either place is checked against the authors' values. One request per file instead of two.
+
 ## v1.7.1 — 2026-09-21
 - Windows: the wallet program keeps the data folder chosen at its first start in the registry (`HKCU\Software\Bitcoin\Bitcoin-Qt\strDataDir`), not on its command line, so a wallet with a custom folder went unnoticed by v1.7.0 and the script offered a fresh node. It now reads that key for the current user and every loaded user hive. If Bitcoin Knots is installed but no data folder is found, it says so and points at `-ExistingNode` before asking anything. Found on the first Windows 10 run.
 
