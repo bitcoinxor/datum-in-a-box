@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.3 — 2026-09-21
+- **Windows: `datum-pool.ps1`**, a one-question helper to change the pool later (or `-Xor` / `-Pool host:port -Key <hex>` with no questions): rewrites the pool part of the gateway config, restarts the gateway, reports the handshake. The installer places it in `C:\XorDatum` and names it at the end.
+- **Windows: the gateway needs Microsoft's Visual C++ runtime** (`vcruntime140.dll`), which a bare Windows 10 does not have; without it `ratum-gateway.exe` exits at once printing nothing, and v1.7.x showed an empty "OK" and an empty log (first Windows 10 run). The installer now installs the runtime from Microsoft when it is missing (installer checked for Microsoft's Authenticode signature), refuses to continue if the gateway's `--version` does not answer, and the gateway loop writes each start and exit code to the log so a launch failure is never silent.
+- **Windows, existing wallet: the gateway's RPC login is whitelisted.** `rpcwhitelist=<gateway user>:<14 block-building calls>` + `rpcwhitelistdefault=0` go into the owner's `bitcoin.conf` next to `server=1`, so the login the gateway holds (the cookie) cannot reach any wallet call even if the gateway or its machine account is compromised; the wallet program itself is unaffected (it does not use RPC), other RPC users are unaffected. Verified on a 29.4.2 node: template fetch and job building work, `getwalletinfo` / `sendtoaddress` / `dumpprivkey` are refused with 403.
+
 ## v1.7.2 — 2026-09-21
 - Windows: GitHub's release downloads fail often from China ("unable to connect to the remote server", seen on the first Windows 10 run). The two Windows builds are now also on our own storage (`snapshot.xorpool.com/mirror/`), used only when GitHub fails, and both files' checksums are pinned in the script from the projects' own SHA256SUMS / `.sha256`, so a download from either place is checked against the authors' values. One request per file instead of two.
 

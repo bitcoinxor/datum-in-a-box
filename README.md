@@ -47,7 +47,7 @@ from scratch). Open PowerShell **as administrator** and paste:
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.2/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.3/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -61,6 +61,12 @@ and waits for it, and the script can add a Startup shortcut so the wallet opens 
 checked against the chain (its block hash at the snapshot height) and its version. If the script did not
 find your node by itself, name its data folder: `-ExistingNode "C:\Users\you\AppData\Roaming\Bitcoin"`.
 Windows only for now.
+
+**Changing the pool later** (Windows): `powershell -ExecutionPolicy Bypass -File C:\XorDatum\datum-pool.ps1`
+as administrator asks only which pool, rewrites the gateway config, restarts the gateway and says whether
+the new pool answered. `-Xor` switches back to Bitcoin Xor without questions; `-Pool host:port -Key <hex>`
+sets another pool without questions. The installer puts it in `C:\XorDatum`; it is also
+[`datum-pool.ps1`](datum-pool.ps1) here.
 Keep the PC from sleeping (Settings → System → Power). Xor Desk is Linux-only for now.
 
 ## macOS — the same setup on a Mac

@@ -20,7 +20,7 @@ param([string]$ExistingNode = "")
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.7.2"
+$SETUP_VERSION = "v1.7.3"
 $KNOTS_VER  = "29.4.2.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
@@ -29,6 +29,10 @@ $RATUM_VER  = "0.1.28"
 $KNOTS_SHA256 = "8fa3445a0f3ecc7d1f9e4f4778e44c786883437ac781902a38135be5ea0a892b"   # bitcoin-29.4.2.knots20260508-win64-pgpverifiable.zip
 $RATUM_SHA256 = "0ccbbbfb2bec452243d72a04f61e8a931a316e3e720ebd3f228d313ee5cef63a"   # ratum-gateway-0.1.28-x86_64-windows.zip
 $MIRROR = "https://snapshot.xorpool.com/mirror"   # same files, for networks where GitHub's release downloads fail (China)
+$VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"   # the gateway needs Microsoft's VC++ runtime (vcruntime140.dll); a bare Windows 10 lacks it
+# Everything the gateway (and datum-status) asks the node for. With an owner's own Bitcoin Knots the gateway's RPC login is limited to
+# exactly these, so it can never reach the wallet calls (rpcwhitelist). Union of ratum-gateway 0.1.28's calls + the status script's.
+$GW_RPC_ALLOW = "getblocktemplate,submitblock,getblock,getbestblockhash,getblockhash,getblockchaininfo,getblockcount,getnetworkinfo,getmininginfo,getmempoolinfo,getconnectioncount,waitforblockheight,preciousblock,uptime"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
 $XOR_HOST   = "datum.xorpool.com"; $XOR_PORT = 28915
@@ -105,7 +109,7 @@ function Get-Sha256([string]$path) { (Get-FileHash -Algorithm SHA256 -Path $path
 function Download([string]$url, [string]$out) {
   try { Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; return }
   catch { $first = $_.Exception.Message }
-  if ($url -like "https://github.com/*") {   # GitHub's release downloads often fail from China: same file from our mirror, same pinned checksum
+  if ($url -like "https://github.com/*" -or $url -like "https://raw.githubusercontent.com/*") {   # GitHub often fails from China: same file from our mirror (binaries keep their pinned checksum)
     $alt = "$MIRROR/" + ($url.Split('/')[-1]); Warn "GitHub download failed ($first); trying the mirror $alt"
     try { Invoke-WebRequest -Uri $alt -OutFile $out -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; return } catch { $first = $_.Exception.Message }
   }
@@ -326,7 +330,17 @@ else {
   Copy-Item $src.FullName "$BIN\bitcoind.exe" -Force; Copy-Item (Join-Path $src.DirectoryName "bitcoin-cli.exe") "$BIN\bitcoin-cli.exe" -Force
   Ok ((& "$BIN\bitcoind.exe" --version | Select-Object -First 1))
 }
-# ratum
+# ratum. First the Microsoft VC++ runtime it is linked against: without vcruntime140.dll the exe exits at once, printing nothing
+# (seen on a bare Windows 10). The runtime installer comes from Microsoft and is checked for Microsoft's Authenticode signature.
+if (-not (Test-Path "$env:SystemRoot\System32\vcruntime140.dll")) {
+  Say "installing the Microsoft Visual C++ runtime (the gateway needs it; ~25 MB from Microsoft)..."
+  $vcr = "$TMP\vc_redist.x64.exe"; Download $VCREDIST_URL $vcr
+  $sig = Get-AuthenticodeSignature $vcr
+  if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Remove-Item $vcr -Force; Die "the VC++ runtime installer is not signed by Microsoft - not running it" }
+  $pr = Start-Process $vcr -ArgumentList "/install /quiet /norestart" -Wait -PassThru
+  if (-not (Test-Path "$env:SystemRoot\System32\vcruntime140.dll")) { Die "the VC++ runtime did not install (exit code $($pr.ExitCode)). Install it by hand from $VCREDIST_URL and run this script again." }
+  Ok "Microsoft Visual C++ runtime installed"
+}
 $curRatum = ""; if (Test-Path "$BIN\ratum-gateway.exe") { try { $curRatum = (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {} }
 if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already installed" }
 else {
@@ -338,7 +352,9 @@ else {
   $src = Get-ChildItem "$TMP\ratum" -Recurse -Filter ratum-gateway.exe | Select-Object -First 1
   if (-not $src) { Die "ratum-gateway.exe not found in the archive" }
   Copy-Item $src.FullName "$BIN\ratum-gateway.exe" -Force
-  Ok ((& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1))
+  $v = ""; try { $v = "" + (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {}
+  if ($v -notmatch [regex]::Escape($RATUM_VER)) { Die "ratum-gateway.exe does not run on this PC (exit code $LASTEXITCODE, output: '$v'). An antivirus may be blocking it; look for a quarantine entry for C:\XorDatum\bin\ratum-gateway.exe, restore it and add an exclusion, then run this script again." }
+  Ok $v
 }
 
 # node config (chain data untouched). This file is rewritten on every run; the owner's own relay / block-building policy
@@ -369,14 +385,16 @@ if ($EXT) {
     if ($t -match '^rpcuser=(.*)$') { $extUser = $Matches[1].Trim() }
     elseif ($t -match '^rpcpassword=(.*)$') { $extPass = $Matches[1].Trim() }
     elseif ($t -match '^rpcport=(\d+)$') { $rpcPort = [int]$Matches[1] }
-    if ($t -match '^server=' -or $t -match '^blocknotify=') { if ($t -match '^blocknotify=(.*)$') { $hadNotify = $Matches[1] }; $out.Add("#$l   # replaced by setup-datum.ps1, see the top of this file") } else { $out.Add($l) }
+    if ($t -match '^server=' -or $t -match '^blocknotify=' -or $t -match '^rpcwhitelistdefault=' -or $t -match '^rpcwhitelist=(__cookie__|[^:]*):.*getblocktemplate') { if ($t -match '^blocknotify=(.*)$') { $hadNotify = $Matches[1] }; $out.Add("#$l   # replaced by setup-datum.ps1, see the top of this file") } else { $out.Add($l) }
   }
-  $ours = @("# --- added by setup-datum.ps1 on $(Get-Date -Format yyyy-MM-dd): RPC on for the DATUM gateway on this PC (local only), and tell it about new blocks",
-            "server=1", "blocknotify=$NOTIFY_CMD", "")
+  $gwUser = if ($extPass) { $extUser } else { "__cookie__" }   # the name the gateway logs in with: cookie logins are always __cookie__
+  $ours = @("# --- added by setup-datum.ps1 on $(Get-Date -Format yyyy-MM-dd): RPC on for the DATUM gateway on this PC (local only), tell it about new blocks,",
+            "# and limit the gateway's login to the block-building calls it needs (never the wallet). Other RPC users are unaffected.",
+            "server=1", "blocknotify=$NOTIFY_CMD", "rpcwhitelist=${gwUser}:$GW_RPC_ALLOW", "rpcwhitelistdefault=0", "")
   [IO.File]::WriteAllBytes($EXT_CONF, $enc.GetBytes((($ours + $out) -join $nl)))
   if ($hadNotify) { Warn "your bitcoin.conf had its own blocknotify ($hadNotify); it is commented out - the gateway needs this one" }
   if ($extUser -and -not $extPass) { Die "$EXT_CONF sets rpcuser without rpcpassword; add the password line or remove rpcuser (then the cookie file is used)" }
-  Ok ("node config ${EXT_CONF}: server=1 + blocknotify added, login by " + $(if ($extPass) { "rpcuser/rpcpassword from the file" } else { "cookie file" }) + ", RPC port $rpcPort")
+  Ok ("node config ${EXT_CONF}: server=1 + blocknotify + rpcwhitelist added, login by " + $(if ($extPass) { "rpcuser/rpcpassword from the file" } else { "cookie file" }) + ", RPC port $rpcPort")
 }
 $POLICY_CONF = "$NODE\policy.conf"
 if ($EXT) { }
@@ -450,7 +468,9 @@ if ($EXT) {
   @"
 @echo off
 :loop
+echo [%date% %time%] gateway-loop: starting ratum-gateway >> "$LOGS\gateway.log"
 "$BIN\ratum-gateway.exe" -c "$GW_CONF" >> "$LOGS\gateway.log" 2>&1
+echo [%date% %time%] gateway-loop: ratum-gateway exited with code %errorlevel% - starting again in 30 s >> "$LOGS\gateway.log"
 ping -n 31 127.0.0.1 >nul
 goto loop
 "@ | Set-Content -Path "$BIN\gateway-loop.cmd" -Encoding ASCII
@@ -501,6 +521,13 @@ try { $hdr = @{}; try { $gp = $gwc.api.admin_password; if ($gp) { $hdr = @{ Auth
   Write-Host ("gateway:  {0:N2} TH/s   shares accepted {1}   rejected {2}" -f $ths, $s.shares_accepted.count, $s.shares_rejected.count) } catch { Write-Host "gateway:  waiting for the node / not answering yet" }
 Write-Host ("log:      $ROOT\logs\gateway.log" + $(if ($ext) { "" } else { "   node: $ROOT\node\debug.log" }))
 '@ | Set-Content -Path "$ROOT\datum-status.ps1" -Encoding ASCII
+
+# datum-pool.ps1: change the pool later with one question, no need to run the installer again (fetched from the same release; not fatal if it fails)
+$helperOk = $false
+foreach ($hu in @("https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/datum-pool.ps1", "$MIRROR/datum-pool.ps1")) {
+  try { Invoke-WebRequest -Uri $hu -OutFile "$ROOT\datum-pool.ps1" -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; $helperOk = $true; break } catch {}
+}
+if ($helperOk) { Ok "helper $ROOT\datum-pool.ps1 (change pool)" } else { Warn "could not fetch datum-pool.ps1 (the change-pool helper); get it later from github.com/bitcoinxor/datum-in-a-box" }
 
 $logMark = if (Test-Path "$LOGS\gateway.log") { (Get-Item "$LOGS\gateway.log").Length } else { 0 }   # only what the gateway logs from here on counts for the pool-link check
 $extVersion = ""
@@ -589,6 +616,7 @@ elseif ($doSnapshot) { Say "  The node started from the snapshot and is catching
 elseif ($hadChain) { Say "  The node restarted with its existing chain data and is catching up whatever it missed - your ASICs get work within minutes." }
 else { Say "  The node is now syncing the chain from the start - 1 to 3 days on a small PC. Your ASICs get work automatically"; Say "  the moment it reaches the tip; until then the gateway waits. Leave the PC on (and not sleeping)." }
 Say ""; Say "  Check on it any time (PowerShell):  powershell -ExecutionPolicy Bypass -File $ROOT\datum-status.ps1"
+if (Test-Path "$ROOT\datum-pool.ps1") { Say "  Change the pool any time:           powershell -ExecutionPolicy Bypass -File $ROOT\datum-pool.ps1   (as administrator)" }
 if ($isXor) { Say "  Your stats once shares flow:        $XOR_URL/miner/$ADDR" } elseif ($POOL_URL) { Say "  Your stats are on your pool's own site:  $POOL_URL" }
 if ($EXT) { Say "  The gateway starts with Windows automatically. Power settings: make sure the PC does not sleep." }
 else { Say "  Both programs start with Windows automatically. Power settings: make sure the PC does not sleep." }
