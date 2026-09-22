@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.4 — 2026-09-21
+- Windows: `datum-status` shows which pool the gateway works with and whether the link to it is up (`pool: Bitcoin Xor at hk.datum.xorpool.com:28915   link UP`). Shares accepted on the PC count only while that link is up, and a miner whose gateway had lost its pool link could not tell from the old output.
+- Windows: `datum-status.ps1` and `datum-pool.ps1` are files in this repo, fetched by the installer from the release (mirror as fallback), so either can be updated without re-running the installer: `Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.4/datum-status.ps1 -OutFile C:\XorDatum\datum-status.ps1`.
+
 ## v1.7.3 — 2026-09-21
 - **Windows: `datum-pool.ps1`**, a one-question helper to change the pool later (or `-Xor` / `-Pool host:port -Key <hex>` with no questions): rewrites the pool part of the gateway config, restarts the gateway, reports the handshake. The installer places it in `C:\XorDatum` and names it at the end.
 - **Windows: the gateway needs Microsoft's Visual C++ runtime** (`vcruntime140.dll`), which a bare Windows 10 does not have; without it `ratum-gateway.exe` exits at once printing nothing, and v1.7.x showed an empty "OK" and an empty log (first Windows 10 run). The installer now installs the runtime from Microsoft when it is missing (installer checked for Microsoft's Authenticode signature), refuses to continue if the gateway's `--version` does not answer, and the gateway loop writes each start and exit code to the log so a launch failure is never silent.

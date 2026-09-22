@@ -20,7 +20,7 @@ param([string]$ExistingNode = "")
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.7.3"
+$SETUP_VERSION = "v1.7.4"
 $KNOTS_VER  = "29.4.2.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
@@ -496,38 +496,14 @@ if (-not (Get-NetFirewallRule -DisplayName "XorDatum gateway $STRATUM_PORT" -Err
 }
 Ok "firewall rule for port $STRATUM_PORT (private networks)"
 
-# status helper
-@'
-$ROOT = if ($env:XORDATUM_ROOT) { $env:XORDATUM_ROOT } else { "C:\XorDatum" }
-$ext = Test-Path "$ROOT\existing-node.txt"   # the node is the owner's own Bitcoin Knots (wallet program), not one this script runs
-# node RPC straight over HTTP with the login the gateway uses (gateway.json): cookie file or user/password
-$gwc = $null; try { $gwc = Get-Content "$ROOT\gateway\gateway.json" -Raw | ConvertFrom-Json } catch {}
-function NodeRpc($method) {
-  $b = $gwc.bitcoind; $cred = if ($b.rpcuser) { "$($b.rpcuser):$($b.rpcpassword)" } else { (Get-Content $b.rpccookiefile -Raw).Trim() }
-  $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($cred)) }
-  (Invoke-RestMethod -Uri $b.rpcurl -Method Post -Headers $h -ContentType 'application/json' -Body ('{"jsonrpc":"1.0","id":"s","method":"' + $method + '","params":[]}') -TimeoutSec 5).result
+# helpers, from the same release: datum-status.ps1 (how is it doing) and datum-pool.ps1 (change the pool). GitHub first, then our mirror.
+foreach ($helper in @("datum-status.ps1", "datum-pool.ps1")) {
+  $got = $false
+  foreach ($hu in @("https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/$helper", "$MIRROR/$helper")) {
+    try { Invoke-WebRequest -Uri $hu -OutFile "$ROOT\$helper" -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; $got = $true; break } catch {}
+  }
+  if ($got) { Ok "helper $ROOT\$helper" } else { Warn "could not fetch $helper; get it later from github.com/bitcoinxor/datum-in-a-box" }
 }
-$n = (Get-Process bitcoind, bitcoin-qt -ErrorAction SilentlyContinue) -ne $null; $g = (Get-Process ratum-gateway -ErrorAction SilentlyContinue) -ne $null
-Write-Host ("node:     " + $(if ($n) {"running"} else { if ($ext) {"NOT running - start Bitcoin Knots"} else {"NOT running"} }) + "    gateway: " + $(if ($g) {"running"} else { if ($ext -and -not $n) {"waiting for the node"} else {"NOT running"} }))
-try { $i = NodeRpc getblockchaininfo; $p = [math]::Round($i.verificationprogress*100,2)
-  if ($p -gt 99.99) { Write-Host "chain:    height $($i.blocks)  at tip" } else { Write-Host "chain:    height $($i.blocks)  syncing $p%" }
-  Write-Host "peers:    $(NodeRpc getconnectioncount)   version: $((NodeRpc getnetworkinfo).subversion)" } catch { Write-Host "chain:    node starting / not answering RPC yet" }
-# live smoothed estimate (needs the API password from the gateway config), else the mean of the last five COMPLETED minutes;
-# never the newest history point, which is the minute still in progress and made a small rig read 0.00 half the time
-try { $hdr = @{}; try { $gp = $gwc.api.admin_password; if ($gp) { $hdr = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$gp")) } } } catch {}
-  $s = Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3 -Headers $hdr
-  $ths = 0.0; if ($s.stratum -and $s.stratum.hashrate_ths -gt 0) { $ths = [double]$s.stratum.hashrate_ths }
-  else { $hist = @($s.hashrate.history | ForEach-Object { $_[1] }); if ($hist.Count -gt 1) { $from = [Math]::Max(0, $hist.Count - 6); $doneMin = $hist[$from..($hist.Count - 2)]; $ths = (($doneMin | Measure-Object -Average).Average) / 1e12 } }
-  Write-Host ("gateway:  {0:N2} TH/s   shares accepted {1}   rejected {2}" -f $ths, $s.shares_accepted.count, $s.shares_rejected.count) } catch { Write-Host "gateway:  waiting for the node / not answering yet" }
-Write-Host ("log:      $ROOT\logs\gateway.log" + $(if ($ext) { "" } else { "   node: $ROOT\node\debug.log" }))
-'@ | Set-Content -Path "$ROOT\datum-status.ps1" -Encoding ASCII
-
-# datum-pool.ps1: change the pool later with one question, no need to run the installer again (fetched from the same release; not fatal if it fails)
-$helperOk = $false
-foreach ($hu in @("https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$SETUP_VERSION/datum-pool.ps1", "$MIRROR/datum-pool.ps1")) {
-  try { Invoke-WebRequest -Uri $hu -OutFile "$ROOT\datum-pool.ps1" -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; $helperOk = $true; break } catch {}
-}
-if ($helperOk) { Ok "helper $ROOT\datum-pool.ps1 (change pool)" } else { Warn "could not fetch datum-pool.ps1 (the change-pool helper); get it later from github.com/bitcoinxor/datum-in-a-box" }
 
 $logMark = if (Test-Path "$LOGS\gateway.log") { (Get-Item "$LOGS\gateway.log").Length } else { 0 }   # only what the gateway logs from here on counts for the pool-link check
 $extVersion = ""
@@ -621,4 +597,4 @@ if ($isXor) { Say "  Your stats once shares flow:        $XOR_URL/miner/$ADDR" }
 if ($EXT) { Say "  The gateway starts with Windows automatically. Power settings: make sure the PC does not sleep." }
 else { Say "  Both programs start with Windows automatically. Power settings: make sure the PC does not sleep." }
 Say ""
-& powershell -ExecutionPolicy Bypass -File "$ROOT\datum-status.ps1"
+if (Test-Path "$ROOT\datum-status.ps1") { & powershell -ExecutionPolicy Bypass -File "$ROOT\datum-status.ps1" }
