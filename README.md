@@ -42,15 +42,25 @@ the same thing.
 the same questions, Bitcoin Knots and ratum-gateway from their official Windows builds (checksums
 verified), installed under `C:\XorDatum`, both running as scheduled tasks that start with Windows
 (no login needed), the one firewall rule for port 23334 on private networks, and the chain snapshot
-if you want it (Windows' built-in `tar` reads zstd). Open PowerShell **as administrator** and paste:
+if you want it (Windows 11's built-in `tar` reads zstd; Windows 10's does not, so there the node syncs
+from scratch). Open PowerShell **as administrator** and paste:
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.6.0/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.0/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
 Check on it any time with `powershell -ExecutionPolicy Bypass -File C:\XorDatum\datum-status.ps1`.
+
+**Already running Bitcoin Knots on that PC** (the wallet program, bitcoin-qt)? The script notices it and
+offers to install only the gateway and use your node: two lines go into your `bitcoin.conf` (`server=1`
+and a `blocknotify`; a backup is kept next to it), the gateway logs in with the node's cookie file, and
+nothing else changes. Mining then happens while Bitcoin Knots is open; the gateway starts with Windows
+and waits for it, and the script can add a Startup shortcut so the wallet opens at login. The node is
+checked against the chain (its block hash at the snapshot height) and its version. If the script did not
+find your node by itself, name its data folder: `-ExistingNode "C:\Users\you\AppData\Roaming\Bitcoin"`.
+Windows only for now.
 Keep the PC from sleeping (Settings → System → Power). Xor Desk is Linux-only for now.
 
 ## macOS — the same setup on a Mac

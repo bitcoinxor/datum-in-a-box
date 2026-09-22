@@ -8,15 +8,19 @@
   and points the gateway at the Bitcoin Xor DATUM pool for the payout split (1% fee).
   Both run as scheduled tasks that start with Windows (no login needed). Nothing is sent anywhere.
   Safe to re-run: an existing install is updated in place; chain data is kept.
+  Already running Bitcoin Knots on this PC (the wallet program)? The script notices it and offers to install only the
+  gateway, using that node: two lines go into its bitcoin.conf (RPC on, block notify), nothing else changes.
 
   Usage:  right-click PowerShell -> Run as administrator, then:
           powershell -ExecutionPolicy Bypass -File setup-datum.ps1
+          add  -ExistingNode "C:\path\to\Bitcoin"  to name the data folder of a node the script did not find by itself
   Source: https://github.com/bitcoinxor/datum-in-a-box   Questions: https://t.me/bitcoinxor
 #>
+param([string]$ExistingNode = "")
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.6.0"
+$SETUP_VERSION = "v1.7.0"
 $KNOTS_VER  = "29.4.2.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -99,10 +103,11 @@ function Download([string]$url, [string]$out) {
 function TaskExists($n) { return [bool](Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) }
 function StopTask($n) { if (TaskExists $n) { Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue } }
 function NodeCli { & "$BIN\bitcoin-cli.exe" "-datadir=$NODE" "-conf=$NODE_CONF" @args 2>$null }   # automatic $args - a declared ($args) parameter swallows the arguments and the call returns nothing
+function StopGateway { StopTask "XorDatum Gateway"; Get-Process ratum-gateway -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 function StopAll {
   # gateway first (stateless), then ask the node to shut down and WAIT: Stop-ScheduledTask kills the process outright,
   # and a killed node has not flushed its chainstate - next start it rewinds to the last flush and replays (minutes to hours)
-  StopTask "XorDatum Gateway"; Get-Process ratum-gateway -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  StopGateway
   if ((Get-Process bitcoind -ErrorAction SilentlyContinue) -and (Test-Path "$BIN\bitcoin-cli.exe")) {
     try { NodeCli stop | Out-Null } catch {}
     Say "  waiting for the node to shut down cleanly..."
@@ -120,12 +125,53 @@ $drive = (Get-Item ($ROOT.Substring(0, 2) + "\")).PSDrive
 $freeGB = [int]((Get-PSDrive $ROOT.Substring(0, 1)).Free / 1GB)
 $cpus = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 Say "Machine: $cpus CPU, $memMB MB RAM, $freeGB GB free on $($ROOT.Substring(0,2))"
-if (Test-Path "$NODE\chainstate") { $MIN_DISK_GB = 5 }   # the node already holds its ~14 GB; an update only needs working room
+
+# ---------------------------------------------------------------- a Bitcoin Knots that is already on this PC?
+# The wallet program (bitcoin-qt) or a bitcoind that is not ours. Found by its running process (data folder from -datadir=
+# or the owner's AppData), by the marker a previous run left, or by -ExistingNode. If found, the owner may keep it and
+# install only the gateway: the gateway then logs in to that node with its cookie file, no password is written anywhere.
+$EXT = $false; $EXT_DIR = ""; $EXT_EXE = ""; $extRunning = $false
+$EXT_MARK = "$ROOT\existing-node.txt"
+function OtherNodeProcs { @(Get-CimInstance Win32_Process -Filter "Name='bitcoin-qt.exe' OR Name='bitcoind.exe'" | Where-Object { -not ($_.ExecutablePath -like "$BIN\*") }) }
+$procs = OtherNodeProcs
+foreach ($pr in $procs) {
+  $extRunning = $true; if ($pr.ExecutablePath) { $EXT_EXE = $pr.ExecutablePath }
+  if ($pr.CommandLine -match '-datadir=(?:"([^"]+)"|(\S+))') { $d = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }; if (-not $EXT_DIR) { $EXT_DIR = $d } }
+  elseif (-not $EXT_DIR) {
+    try { $sid = (Invoke-CimMethod -InputObject $pr -MethodName GetOwnerSid).Sid
+          $prof = (Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $sid } | Select-Object -First 1).LocalPath
+          if ($prof -and (Test-Path "$prof\AppData\Roaming\Bitcoin")) { $EXT_DIR = "$prof\AppData\Roaming\Bitcoin" } } catch {}
+  }
+}
+if ($ExistingNode) { $EXT_DIR = $ExistingNode.Trim().TrimEnd('\') }
+elseif (-not $EXT_DIR -and (Test-Path $EXT_MARK)) { $EXT_DIR = (Get-Content $EXT_MARK -First 1).Trim() }
+elseif (-not $EXT_DIR -and (Test-Path "$env:APPDATA\Bitcoin\chainstate")) { $EXT_DIR = "$env:APPDATA\Bitcoin" }
+if (-not $EXT_EXE) { foreach ($c in @("$env:ProgramFiles\Bitcoin\bitcoin-qt.exe", "$env:ProgramFiles\Bitcoin Knots\bitcoin-qt.exe")) { if (Test-Path $c) { $EXT_EXE = $c; break } } }
+if ($ExistingNode -and -not (Test-Path "$EXT_DIR\chainstate")) { Die "-ExistingNode ${EXT_DIR}: no 'chainstate' folder there, so it is not a node's data folder (the default is %APPDATA%\Bitcoin)" }
+if ($EXT_DIR -and (Test-Path "$EXT_DIR\chainstate")) {
+  Say ""; Say ("Bitcoin Knots is already on this PC: data folder $EXT_DIR" + $(if ($extRunning) { "  (running now)" } else { "" }))
+  Say "     1) Use it: install only the DATUM gateway, no second node   (the default)"
+  Say "     2) Install a separate node under $ROOT as well   (two nodes cannot run at the same time: same ports)"
+  while ($true) {
+    $c = Ask "   Node" $(if (Test-Path $NODE_CONF) { "2" } else { "1" })
+    if ($c -eq "1") { $EXT = $true; break } elseif ($c -eq "2") { break }
+    Write-Host "   Type 1 or 2." -ForegroundColor Red
+  }
+  if ($EXT) {
+    while ($true) {
+      $EXT_DIR = (Ask "   Its data folder (the one with 'blocks' and 'chainstate' in it)" $EXT_DIR).TrimEnd('\')
+      if (Test-Path "$EXT_DIR\chainstate") { Ok "node: your Bitcoin Knots at $EXT_DIR"; break }
+      Write-Host "   No 'chainstate' folder in $EXT_DIR - not a node's data folder. In Bitcoin Knots: Settings > Options > Main shows the data directory." -ForegroundColor Red
+    }
+  }
+}
+if ($EXT) { $MIN_DISK_GB = 1 }   # the gateway is 3 MB
+elseif (Test-Path "$NODE\chainstate") { $MIN_DISK_GB = 5 }   # the node already holds its ~14 GB; an update only needs working room
 if ($freeGB -lt $MIN_DISK_GB) { Die "need at least $MIN_DISK_GB GB free on $($ROOT.Substring(0,2)) (have $freeGB GB). The pruned node uses ~14 GB plus headroom." }
 if ($memMB -lt 3500) { Warn "less than 4 GB RAM - it works, but the first sync will be slow; Windows manages swap on its own" }
 $UPDATE = (Test-Path $NODE_CONF) -or (Test-Path $GW_CONF)
 $hadChain = Test-Path "$NODE\chainstate"   # chain data from an earlier run - decides the wording at the end
-if ($UPDATE) { Say ""; Say "An existing install was found in $ROOT. It will be updated in place: binaries refreshed, configs rewritten from your answers, chain data kept." }
+if ($UPDATE) { Say ""; Say ("An existing install was found in $ROOT. It will be updated in place: binaries refreshed, configs rewritten from your answers" + $(if ($EXT) { "." } else { ", chain data kept." })) }
 
 # ---------------------------------------------------------------- questions
 $oldAddr = ""; $oldName = ""; $oldPool = ""; $oldPass = ""; $oldApi = ""; $oldKey = ""; $oldUrl = ""
@@ -194,9 +240,14 @@ if (-not $otherPool) {
 }
 $isXor = ($POOL_PUBKEY -eq $XOR_PUBKEY)
 
-$doSnapshot = $false; $snap = $null
+$doSnapshot = $false; $snap = $null; $autoStart = $false
+if ($EXT) {
+  Say ""; Say "4) Mining happens only while Bitcoin Knots is running. The gateway starts with Windows and waits for it."
+  if ($EXT_EXE) { $autoStart = ConfirmYes "   Start Bitcoin Knots automatically when you log in to Windows (a shortcut in your Startup folder)?" }
+  else { Say "   (bitcoin-qt.exe was not found in the usual place, so no autostart shortcut is offered - start it as you do today)" }
+}
 try { $snap = Invoke-RestMethod -Uri $SNAPSHOT_URL -TimeoutSec 15 -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" } } catch {}
-if ($snap -and $snap.file) {
+if ($snap -and $snap.file -and -not $EXT) {
   $haveH = 0
   if ((Test-Path "$NODE\chainstate") -and (Test-Path "$BIN\bitcoin-cli.exe")) { try { $haveH = [int](NodeCli getblockcount) } catch { $haveH = 0 } }
   if ($haveH -ge [int]$snap.height) { Say ""; Say "Your node is already past the published snapshot (height $haveH); no snapshot needed." }
@@ -214,7 +265,11 @@ $API_PASS = if ($oldApi) { $oldApi } else { -join ((48..57 + 97..102) | Get-Rand
 
 Say ""; Say "Summary"
 Say "  Payout address   $ADDR"; Say "  Block tag        Bitcoin Xor / $NAME"; if ($isXor) { Say "  Pool             Bitcoin Xor at ${POOL_HOST}:$POOL_PORT  (1% fee, you build the templates)" } else { Say ("  Pool             ${POOL_HOST}:$POOL_PORT  key " + $POOL_PUBKEY.Substring(0, 8) + "..." + $POOL_PUBKEY.Substring(120) + "  (that pool's own fee and rules apply)") }
-Say "  Install to       $ROOT  (node pruned, ~14 GB, RPC local-only; both programs start with Windows)"
+if ($EXT) {
+  Say "  Node             your Bitcoin Knots at $EXT_DIR  (two lines go into its bitcoin.conf: server=1, blocknotify; login by its cookie file)"
+  Say "  Install to       $ROOT  (gateway only; starts with Windows and waits for Bitcoin Knots)"
+  if ($autoStart) { Say "  Autostart        Bitcoin Knots shortcut in your Startup folder" }
+} else { Say "  Install to       $ROOT  (node pruned, ~14 GB, RPC local-only; both programs start with Windows)" }
 if ($doSnapshot) { Say "  Snapshot         $($snap.file) -> node starts at height $($snap.height)" }
 Say "  Firewall         allow TCP $STRATUM_PORT inbound on private networks (your ASICs)"
 Say ""
@@ -222,12 +277,17 @@ if (-not (ConfirmNo "Install with these settings?")) { Say "Nothing changed."; e
 
 # ---------------------------------------------------------------- install
 Say ""; Say "Installing..."
-foreach ($d in @($ROOT, $BIN, $NODE, $GW, $LOGS, $TMP)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
-StopAll
+foreach ($d in @($ROOT, $BIN, $GW, $LOGS, $TMP) + $(if ($EXT) { @() } else { @($NODE) })) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+if ($EXT) {
+  StopGateway   # never the node: it is not ours
+  if (TaskExists "XorDatum Node") { StopAll; Disable-ScheduledTask -TaskName "XorDatum Node" | Out-Null; Warn "the node this script installed earlier under $NODE is stopped and disabled; your Bitcoin Knots is the node now" }
+  Set-Content -Path $EXT_MARK -Value $EXT_DIR -Encoding ASCII
+} else { StopAll; Remove-Item $EXT_MARK -Force -ErrorAction SilentlyContinue }
 
 # Knots
 $curKnots = ""; if (Test-Path "$BIN\bitcoind.exe") { try { $curKnots = (& "$BIN\bitcoind.exe" --version | Select-Object -First 1) } catch {} }
-if ($curKnots -match [regex]::Escape("v$KNOTS_VER")) { Ok "Bitcoin Knots v$KNOTS_VER already installed" }
+if ($EXT) { }
+elseif ($curKnots -match [regex]::Escape("v$KNOTS_VER")) { Ok "Bitcoin Knots v$KNOTS_VER already installed" }
 else {
   Say "downloading Bitcoin Knots v$KNOTS_VER (~50 MB)..."
   $kzip = "bitcoin-$KNOTS_VER-win64-pgpverifiable.zip"; $kurl = "https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
@@ -260,8 +320,42 @@ else {
 # lives in policy.conf, included at the end and never touched again once it exists. The main file beats an included
 # one, so a tunable the owner set there is left commented out here.
 $curl = "$env:SystemRoot\System32\curl.exe"
+$NOTIFY_CMD = "$curl -s -m 3 http://127.0.0.1:8000/NOTIFY"
+$rpcPort = 8332; $extUser = ""; $extPass = ""
+if ($EXT) {
+  # The owner's bitcoin.conf is theirs: read it, keep it byte for byte, comment out only 'server=' and 'blocknotify=' lines and put
+  # ours at the top (top of file = every network section). Login is by the node's cookie file unless the file sets a password
+  # (a node with rpcpassword writes no cookie). The wallet program must be closed while its config changes - and it must
+  # restart anyway to switch RPC on.
+  while (OtherNodeProcs) { Read-Host "  Please close Bitcoin Knots now (File > Exit, wait until the window is gone), then press Enter" | Out-Null }
+  $EXT_CONF = "$EXT_DIR\bitcoin.conf"; $raw = [byte[]]@(); $enc = New-Object System.Text.UTF8Encoding($false)
+  if (Test-Path $EXT_CONF) {
+    Copy-Item $EXT_CONF "$EXT_CONF.bak-$(Get-Date -Format yyyyMMdd-HHmmss)" -Force
+    $raw = [IO.File]::ReadAllBytes($EXT_CONF)
+    if ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF) { $enc = New-Object System.Text.UTF8Encoding($true) }
+    else { try { [void](New-Object System.Text.UTF8Encoding($false, $true)).GetString($raw) } catch { $enc = [System.Text.Encoding]::Default } }   # not UTF-8: the system code page (GBK etc.)
+  }
+  $text = if ($raw.Length) { $enc.GetString($raw) } else { "" }
+  if ($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }   # not StartsWith: culture-aware, it treats U+FEFF as ignorable and matches anything
+  $nl = if ($text -match "`r`n") { "`r`n" } else { "`n" }
+  $hadNotify = ""; $out = New-Object System.Collections.Generic.List[string]
+  foreach ($l in ($text -split "`r?`n")) {
+    $t = ($l -replace '#.*$', '').Trim()
+    if ($t -match '^rpcuser=(.*)$') { $extUser = $Matches[1].Trim() }
+    elseif ($t -match '^rpcpassword=(.*)$') { $extPass = $Matches[1].Trim() }
+    elseif ($t -match '^rpcport=(\d+)$') { $rpcPort = [int]$Matches[1] }
+    if ($t -match '^server=' -or $t -match '^blocknotify=') { if ($t -match '^blocknotify=(.*)$') { $hadNotify = $Matches[1] }; $out.Add("#$l   # replaced by setup-datum.ps1, see the top of this file") } else { $out.Add($l) }
+  }
+  $ours = @("# --- added by setup-datum.ps1 on $(Get-Date -Format yyyy-MM-dd): RPC on for the DATUM gateway on this PC (local only), and tell it about new blocks",
+            "server=1", "blocknotify=$NOTIFY_CMD", "")
+  [IO.File]::WriteAllBytes($EXT_CONF, $enc.GetBytes((($ours + $out) -join $nl)))
+  if ($hadNotify) { Warn "your bitcoin.conf had its own blocknotify ($hadNotify); it is commented out - the gateway needs this one" }
+  if ($extUser -and -not $extPass) { Die "$EXT_CONF sets rpcuser without rpcpassword; add the password line or remove rpcuser (then the cookie file is used)" }
+  Ok ("node config ${EXT_CONF}: server=1 + blocknotify added, login by " + $(if ($extPass) { "rpcuser/rpcpassword from the file" } else { "cookie file" }) + ", RPC port $rpcPort")
+}
 $POLICY_CONF = "$NODE\policy.conf"
-if (-not (Test-Path $POLICY_CONF)) {
+if ($EXT) { }
+elseif (-not (Test-Path $POLICY_CONF)) {
 @"
 # policy.conf - YOUR node's policy: what it relays, and what goes into the blocks your gateway builds.
 # This file is yours; the installer never overwrites it. One option per line, no leading dash.
@@ -275,8 +369,9 @@ if (-not (Test-Path $POLICY_CONF)) {
 #datacarriersize=83         # most bytes of arbitrary data per transaction (0 = none at all)
 "@ | Set-Content -Path $POLICY_CONF -Encoding ASCII
 }
-$policySet = @(Get-Content $POLICY_CONF | ForEach-Object { ($_ -replace '\s*#.*$', '').Trim() } | Where-Object { $_ -match '^-?[a-z0-9]+=' } | ForEach-Object { ($_ -replace '^-', '') -replace '=.*$', '' })
+$policySet = @(); if (-not $EXT) { $policySet = @(Get-Content $POLICY_CONF | ForEach-Object { ($_ -replace '\s*#.*$', '').Trim() } | Where-Object { $_ -match '^-?[a-z0-9]+=' } | ForEach-Object { ($_ -replace '^-', '') -replace '=.*$', '' }) }
 function Tunable($key, $val) { if ($policySet -contains $key) { "#$key=$val   # now set in policy.conf" } else { "$key=$val" } }
+if (-not $EXT) {
 @"
 # Bitcoin Knots (BLAKE2b fork) - written by setup-datum.ps1 on $(Get-Date -Format yyyy-MM-dd)
 # This file is rewritten by the installer. Your own relay / block policy belongs in policy.conf next to it.
@@ -295,16 +390,19 @@ fixedseeds=0
 addnode=$PEER1
 addnode=$PEER2
 # Tell the gateway the instant a new block arrives (HTTP notify; Windows has no signals)
-blocknotify=$curl -s -m 3 http://127.0.0.1:8000/NOTIFY
+blocknotify=$NOTIFY_CMD
 
 # your own policy settings
 includeconf=policy.conf
 "@ | Set-Content -Path $NODE_CONF -Encoding ASCII
 Ok "node config $NODE_CONF"
+}
 
 # gateway config
 $cfg = [ordered]@{
-  bitcoind = [ordered]@{ rpcurl = "http://127.0.0.1:8332"; rpcuser = "knots"; rpcpassword = $RPC_PASS; work_update_seconds = 40; notify_fallback = $true }
+  bitcoind = $(if (-not $EXT) { [ordered]@{ rpcurl = "http://127.0.0.1:8332"; rpcuser = "knots"; rpcpassword = $RPC_PASS; work_update_seconds = 40; notify_fallback = $true } }
+              elseif ($extPass) { [ordered]@{ rpcurl = "http://127.0.0.1:$rpcPort"; rpcuser = $extUser; rpcpassword = $extPass; work_update_seconds = 40; notify_fallback = $true } }
+              else { [ordered]@{ rpcurl = "http://127.0.0.1:$rpcPort"; rpccookiefile = "$EXT_DIR\.cookie"; work_update_seconds = 40; notify_fallback = $true } })
   mining   = [ordered]@{ pool_address = $ADDR; coinbase_tag_primary = $NAME; coinbase_tag_secondary = $NAME }
   stratum  = [ordered]@{ listen_addr = "0.0.0.0"; listen_port = $STRATUM_PORT }
   datum    = [ordered]@{ pool_host = $POOL_HOST; pool_port = $POOL_PORT; pool_pubkey = $POOL_PUBKEY; pool_url = $POOL_URL; pool_pass_full_users = $false; pool_pass_workers = $true; gateway_fee_bps = 0; pooled_mining_only = $true }
@@ -317,11 +415,31 @@ Ok "gateway config $GW_CONF"
 $sysPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
 $trig = New-ScheduledTaskTrigger -AtStartup
-$nodeAction = New-ScheduledTaskAction -Execute "$BIN\bitcoind.exe" -Argument "-datadir=$NODE -conf=$NODE_CONF"
-$gwAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument "/c `"`"$BIN\ratum-gateway.exe`" -c `"$GW_CONF`" >> `"$LOGS\gateway.log`" 2>&1`""
-Register-ScheduledTask -TaskName "XorDatum Node" -Action $nodeAction -Trigger $trig -Principal $sysPrincipal -Settings $settings -Force | Out-Null
-Register-ScheduledTask -TaskName "XorDatum Gateway" -Action $gwAction -Trigger $trig -Principal $sysPrincipal -Settings $settings -Force | Out-Null
-Ok "scheduled tasks (start with Windows)"
+if ($EXT) {
+  # The gateway exits when the node is not there (no cookie file yet, wallet program closed), so it runs inside a loop that
+  # starts it again every 30 s - the task's own restart-on-failure gives up after 999 tries, a loop never does.
+  @"
+@echo off
+:loop
+"$BIN\ratum-gateway.exe" -c "$GW_CONF" >> "$LOGS\gateway.log" 2>&1
+ping -n 31 127.0.0.1 >nul
+goto loop
+"@ | Set-Content -Path "$BIN\gateway-loop.cmd" -Encoding ASCII
+  $gwAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument "/c `"`"$BIN\gateway-loop.cmd`"`""
+  Register-ScheduledTask -TaskName "XorDatum Gateway" -Action $gwAction -Trigger $trig -Principal $sysPrincipal -Settings $settings -Force | Out-Null
+  Ok "scheduled task (starts with Windows, waits for Bitcoin Knots)"
+} else {
+  $nodeAction = New-ScheduledTaskAction -Execute "$BIN\bitcoind.exe" -Argument "-datadir=$NODE -conf=$NODE_CONF"
+  $gwAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument "/c `"`"$BIN\ratum-gateway.exe`" -c `"$GW_CONF`" >> `"$LOGS\gateway.log`" 2>&1`""
+  Register-ScheduledTask -TaskName "XorDatum Node" -Action $nodeAction -Trigger $trig -Principal $sysPrincipal -Settings $settings -Force | Out-Null
+  Register-ScheduledTask -TaskName "XorDatum Gateway" -Action $gwAction -Trigger $trig -Principal $sysPrincipal -Settings $settings -Force | Out-Null
+  Ok "scheduled tasks (start with Windows)"
+}
+if ($autoStart) {
+  try { $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) "Bitcoin Knots.lnk"; $sh = New-Object -ComObject WScript.Shell; $sc = $sh.CreateShortcut($lnk)
+        $sc.TargetPath = $EXT_EXE; $sc.Arguments = "-min"; $sc.WorkingDirectory = Split-Path $EXT_EXE; $sc.Save(); Ok "autostart shortcut $lnk (starts minimized)" }
+  catch { Warn "could not create the Startup shortcut ($($_.Exception.Message)) - start Bitcoin Knots by hand after a reboot" }
+}
 
 # firewall: the gateway port, private/domain networks only (your ASICs); the node's RPC stays local
 if (-not (Get-NetFirewallRule -DisplayName "XorDatum gateway $STRATUM_PORT" -ErrorAction SilentlyContinue)) {
@@ -331,27 +449,65 @@ Ok "firewall rule for port $STRATUM_PORT (private networks)"
 
 # status helper
 @'
-$BIN="C:\XorDatum\bin"; $NODE="C:\XorDatum\node"
-function NodeCli { & "$BIN\bitcoin-cli.exe" "-datadir=$NODE" "-conf=$NODE\bitcoin.conf" @args 2>$null }   # not "cli": that is a built-in alias of Clear-Item and aliases win
-$n = (Get-Process bitcoind -ErrorAction SilentlyContinue) -ne $null; $g = (Get-Process ratum-gateway -ErrorAction SilentlyContinue) -ne $null
-Write-Host ("node:     " + $(if ($n) {"running"} else {"NOT running"}) + "    gateway: " + $(if ($g) {"running"} else {"NOT running"}))
-try { $i = NodeCli getblockchaininfo | ConvertFrom-Json; $p = [math]::Round($i.verificationprogress*100,2)
+$ROOT = if ($env:XORDATUM_ROOT) { $env:XORDATUM_ROOT } else { "C:\XorDatum" }
+$ext = Test-Path "$ROOT\existing-node.txt"   # the node is the owner's own Bitcoin Knots (wallet program), not one this script runs
+# node RPC straight over HTTP with the login the gateway uses (gateway.json): cookie file or user/password
+$gwc = $null; try { $gwc = Get-Content "$ROOT\gateway\gateway.json" -Raw | ConvertFrom-Json } catch {}
+function NodeRpc($method) {
+  $b = $gwc.bitcoind; $cred = if ($b.rpcuser) { "$($b.rpcuser):$($b.rpcpassword)" } else { (Get-Content $b.rpccookiefile -Raw).Trim() }
+  $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($cred)) }
+  (Invoke-RestMethod -Uri $b.rpcurl -Method Post -Headers $h -ContentType 'application/json' -Body ('{"jsonrpc":"1.0","id":"s","method":"' + $method + '","params":[]}') -TimeoutSec 5).result
+}
+$n = (Get-Process bitcoind, bitcoin-qt -ErrorAction SilentlyContinue) -ne $null; $g = (Get-Process ratum-gateway -ErrorAction SilentlyContinue) -ne $null
+Write-Host ("node:     " + $(if ($n) {"running"} else { if ($ext) {"NOT running - start Bitcoin Knots"} else {"NOT running"} }) + "    gateway: " + $(if ($g) {"running"} else { if ($ext -and -not $n) {"waiting for the node"} else {"NOT running"} }))
+try { $i = NodeRpc getblockchaininfo; $p = [math]::Round($i.verificationprogress*100,2)
   if ($p -gt 99.99) { Write-Host "chain:    height $($i.blocks)  at tip" } else { Write-Host "chain:    height $($i.blocks)  syncing $p%" }
-  Write-Host "peers:    $(NodeCli getconnectioncount)" } catch { Write-Host "chain:    node starting / not answering RPC yet" }
+  Write-Host "peers:    $(NodeRpc getconnectioncount)   version: $((NodeRpc getnetworkinfo).subversion)" } catch { Write-Host "chain:    node starting / not answering RPC yet" }
 # live smoothed estimate (needs the API password from the gateway config), else the mean of the last five COMPLETED minutes;
 # never the newest history point, which is the minute still in progress and made a small rig read 0.00 half the time
-try { $hdr = @{}; try { $gp = (Get-Content "C:\XorDatum\gateway\gateway.json" -Raw | ConvertFrom-Json).api.admin_password; if ($gp) { $hdr = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$gp")) } } } catch {}
+try { $hdr = @{}; try { $gp = $gwc.api.admin_password; if ($gp) { $hdr = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$gp")) } } } catch {}
   $s = Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3 -Headers $hdr
   $ths = 0.0; if ($s.stratum -and $s.stratum.hashrate_ths -gt 0) { $ths = [double]$s.stratum.hashrate_ths }
   else { $hist = @($s.hashrate.history | ForEach-Object { $_[1] }); if ($hist.Count -gt 1) { $from = [Math]::Max(0, $hist.Count - 6); $doneMin = $hist[$from..($hist.Count - 2)]; $ths = (($doneMin | Measure-Object -Average).Average) / 1e12 } }
   Write-Host ("gateway:  {0:N2} TH/s   shares accepted {1}   rejected {2}" -f $ths, $s.shares_accepted.count, $s.shares_rejected.count) } catch { Write-Host "gateway:  waiting for the node / not answering yet" }
-Write-Host "log:      C:\XorDatum\logs\gateway.log   node: C:\XorDatum\node\debug.log"
+Write-Host ("log:      $ROOT\logs\gateway.log" + $(if ($ext) { "" } else { "   node: $ROOT\node\debug.log" }))
 '@ | Set-Content -Path "$ROOT\datum-status.ps1" -Encoding ASCII
 
 $logMark = if (Test-Path "$LOGS\gateway.log") { (Get-Item "$LOGS\gateway.log").Length } else { 0 }   # only what the gateway logs from here on counts for the pool-link check
-Start-ScheduledTask -TaskName "XorDatum Node"; Start-Sleep 3; Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 4
-if (-not (Get-Process bitcoind -ErrorAction SilentlyContinue)) { Die "the node did not start - see $NODE\debug.log" }
-if (-not (Get-Process ratum-gateway -ErrorAction SilentlyContinue)) { Die "the gateway did not start - see $LOGS\gateway.log" }
+$extVersion = ""
+if ($EXT) {
+  Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 2
+  if ((Get-ScheduledTask -TaskName "XorDatum Gateway").State -ne 'Running') { Die "the gateway task did not start - see $LOGS\gateway.log" }
+  Say ""; Say "Now start Bitcoin Knots again (your usual shortcut). The gateway is running and waits for it."
+  Read-Host "  Press Enter once the Bitcoin Knots window is open" | Out-Null
+  # its RPC comes up a little after the window; read the version through the gateway's own login to prove that login works
+  $ni = $null; $gwc = Get-Content $GW_CONF -Raw | ConvertFrom-Json
+  function ExtRpc($method, $params) {   # JSON-RPC with the login from gateway.json (cookie file or user/password)
+    $b = $gwc.bitcoind; $cred = if ($b.rpcuser) { "$($b.rpcuser):$($b.rpcpassword)" } else { (Get-Content $b.rpccookiefile -Raw).Trim() }
+    $h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($cred)) }
+    $body = @{ jsonrpc = "1.0"; id = "s"; method = $method; params = @($params) } | ConvertTo-Json -Compress
+    (Invoke-RestMethod -Uri $b.rpcurl -Method Post -Headers $h -ContentType 'application/json' -Body $body -TimeoutSec 5).result
+  }
+  for ($i = 0; $i -lt 45; $i++) { try { $ni = ExtRpc "getnetworkinfo" @(); if ($ni) { break } } catch {}; Start-Sleep 2 }
+  if ($ni) {
+    $extVersion = "" + $ni.subversion; $knotsShort = ($KNOTS_VER.Split('.')[0..2]) -join '.'; Ok "Bitcoin Knots answers RPC: $extVersion"
+    if ($extVersion -notmatch 'Knots') { Warn "this does not look like Bitcoin Knots (BLAKE2b fork): $extVersion - the gateway can only build blocks for this chain with the fork's node" }
+    elseif ($extVersion -notmatch [regex]::Escape($knotsShort)) { Warn "Bitcoin Knots v$knotsShort is the current release; yours is $extVersion - please update it from bitcoinknots.org / GitHub, the same install-over-the-top as usual" }
+    # same chain? The upstream Bitcoin Knots says 'Knots' too. A block hash settles it: the published snapshot's height and hash.
+    if ($snap -and $snap.block_hash) {
+      try { $bh = ExtRpc "getblockchaininfo" @()
+            if ([int]$bh.blocks -ge [int]$snap.height) {
+              $hh = "" + (ExtRpc "getblockhash" @([int]$snap.height))
+              if ($hh -eq $snap.block_hash) { Ok "chain check: block $($snap.height) matches the Bitcoin BLAKE2b chain (height $($bh.blocks))" }
+              else { Warn "chain check FAILED: this node's block $($snap.height) is $hh, the Bitcoin BLAKE2b chain's is $($snap.block_hash). This Bitcoin Knots follows another chain; the gateway cannot mine with it." }
+            } else { Say "  chain check: node at height $($bh.blocks), below $($snap.height) - still syncing, checked later by datum-status" } } catch {}
+    }
+  } else { Warn "Bitcoin Knots is not answering RPC yet (not started, still loading, or server=1 did not take). datum-status shows it later; the gateway keeps trying every 30 s." }
+} else {
+  Start-ScheduledTask -TaskName "XorDatum Node"; Start-Sleep 3; Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 4
+  if (-not (Get-Process bitcoind -ErrorAction SilentlyContinue)) { Die "the node did not start - see $NODE\debug.log" }
+  if (-not (Get-Process ratum-gateway -ErrorAction SilentlyContinue)) { Die "the gateway did not start - see $LOGS\gateway.log" }
+}
 
 # snapshot
 if ($doSnapshot) {
@@ -378,7 +534,7 @@ Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
 # Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
 # port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
 $link = ""
-for ($i = 0; $i -lt 20; $i++) {
+for ($i = 0; $i -lt $(if ($EXT -and $extVersion) { 40 } else { 20 }); $i++) {
   try { $link = "" + (Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3).status } catch { $link = "" }
   if ($link -eq "Connected and Ready") { break }; Start-Sleep 2
 }
@@ -399,11 +555,13 @@ if (-not $myip) { $myip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
 Say ""; Write-Host "Done." -ForegroundColor Green; Say ""
 Say "  Point your ASICs at:   stratum+tcp://$($myip):$STRATUM_PORT"
 Say "                         worker:  anything.rig1   password:  x"; Say ""
-if ($doSnapshot) { Say "  The node started from the snapshot and is catching up the last few blocks - your ASICs get work within minutes." }
+if ($EXT) { Say "  Your Bitcoin Knots is the node: keep it running (and the PC awake, logged in) - the gateway waits whenever it is closed."; Say "  Its config: $EXT_DIR\bitcoin.conf (a backup of the old one sits next to it)." }
+elseif ($doSnapshot) { Say "  The node started from the snapshot and is catching up the last few blocks - your ASICs get work within minutes." }
 elseif ($hadChain) { Say "  The node restarted with its existing chain data and is catching up whatever it missed - your ASICs get work within minutes." }
 else { Say "  The node is now syncing the chain from the start - 1 to 3 days on a small PC. Your ASICs get work automatically"; Say "  the moment it reaches the tip; until then the gateway waits. Leave the PC on (and not sleeping)." }
 Say ""; Say "  Check on it any time (PowerShell):  powershell -ExecutionPolicy Bypass -File $ROOT\datum-status.ps1"
 if ($isXor) { Say "  Your stats once shares flow:        $XOR_URL/miner/$ADDR" } elseif ($POOL_URL) { Say "  Your stats are on your pool's own site:  $POOL_URL" }
-Say "  Both programs start with Windows automatically. Power settings: make sure the PC does not sleep."
+if ($EXT) { Say "  The gateway starts with Windows automatically. Power settings: make sure the PC does not sleep." }
+else { Say "  Both programs start with Windows automatically. Power settings: make sure the PC does not sleep." }
 Say ""
 & powershell -ExecutionPolicy Bypass -File "$ROOT\datum-status.ps1"
