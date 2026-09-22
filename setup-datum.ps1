@@ -20,7 +20,7 @@ param([string]$ExistingNode = "")
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.7.0"
+$SETUP_VERSION = "v1.7.1"
 $KNOTS_VER  = "29.4.2.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -143,6 +143,19 @@ foreach ($pr in $procs) {
           if ($prof -and (Test-Path "$prof\AppData\Roaming\Bitcoin")) { $EXT_DIR = "$prof\AppData\Roaming\Bitcoin" } } catch {}
   }
 }
+# The wallet program remembers the data folder chosen at its first start in the registry (Qt settings), not on its command
+# line: HKCU\Software\Bitcoin\Bitcoin-Qt\strDataDir, with forward slashes. Ours (this elevated user) and every loaded user hive.
+function RegDataDirs($extra) {
+  $paths = @("HKCU:\Software\Bitcoin\Bitcoin-Qt") + @($extra)
+  try { if (-not (Get-PSDrive HKU -ErrorAction SilentlyContinue)) { New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS -Scope Global | Out-Null }
+        $paths += @(Get-ChildItem HKU:\ -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' } | ForEach-Object { "HKU:\$($_.PSChildName)\Software\Bitcoin\Bitcoin-Qt" }) } catch {}
+  foreach ($rp in $paths) {
+    try { $v = "" + (Get-ItemProperty -Path $rp -Name strDataDir -ErrorAction Stop).strDataDir } catch { continue }
+    if ($v) { $v = ($v -replace '/', '\').TrimEnd('\'); if (Test-Path "$v\chainstate") { return $v } }
+  }
+  return ""
+}
+if (-not $EXT_DIR) { $EXT_DIR = RegDataDirs @() }
 if ($ExistingNode) { $EXT_DIR = $ExistingNode.Trim().TrimEnd('\') }
 elseif (-not $EXT_DIR -and (Test-Path $EXT_MARK)) { $EXT_DIR = (Get-Content $EXT_MARK -First 1).Trim() }
 elseif (-not $EXT_DIR -and (Test-Path "$env:APPDATA\Bitcoin\chainstate")) { $EXT_DIR = "$env:APPDATA\Bitcoin" }
@@ -165,6 +178,7 @@ if ($EXT_DIR -and (Test-Path "$EXT_DIR\chainstate")) {
     }
   }
 }
+elseif ($EXT_EXE -or $extRunning) { Say ""; Warn "Bitcoin Knots seems to be on this PC ($(if ($EXT_EXE) { $EXT_EXE } else { 'running' })) but its data folder was not found. To use it instead of installing a node,"; Say "         stop here (Ctrl+C) and run again with  -ExistingNode `"<its data folder>`"  (Bitcoin Knots: Help > Debug window > Information > Datadir)" }
 if ($EXT) { $MIN_DISK_GB = 1 }   # the gateway is 3 MB
 elseif (Test-Path "$NODE\chainstate") { $MIN_DISK_GB = 5 }   # the node already holds its ~14 GB; an update only needs working room
 if ($freeGB -lt $MIN_DISK_GB) { Die "need at least $MIN_DISK_GB GB free on $($ROOT.Substring(0,2)) (have $freeGB GB). The pruned node uses ~14 GB plus headroom." }

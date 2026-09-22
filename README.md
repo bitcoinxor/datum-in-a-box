@@ -47,7 +47,7 @@ from scratch). Open PowerShell **as administrator** and paste:
 
 ```powershell
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.0/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.1/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
