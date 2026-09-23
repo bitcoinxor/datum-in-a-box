@@ -379,7 +379,7 @@ server=1
 disablewallet=1
 prune=2000
 txindex=0
-$(tunable dbcache "$([ "$MEM_MB" -ge 3500 ] && echo 2000 || echo 600)")
+$(tunable dbcache "$([ "$MEM_MB" -ge 7000 ] && echo 2000 || { [ "$MEM_MB" -ge 3500 ] && echo 1000 || echo 600; })")
 $(tunable maxmempool 200)
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1

@@ -1,6 +1,7 @@
 # Changelog
 
 ## v1.7.4 — 2026-09-21
+- Linux and macOS: the node's `dbcache` is now sized in three tiers, 600 below 3.5 GB RAM, 1000 from 3.5 GB, 2000 from 7 GB (was 2000 from 3.5 GB, which on a 4 GB machine slowly crowds out the page cache the node needs to connect blocks fast). Existing installs: `sudo datum-policy set dbcache=1000 --yes`.
 - Windows: `datum-status` shows which pool the gateway works with and whether the link to it is up (`pool: Bitcoin Xor at hk.datum.xorpool.com:28915   link UP`). Shares accepted on the PC count only while that link is up, and a miner whose gateway had lost its pool link could not tell from the old output.
 - Windows: `datum-status.ps1` and `datum-pool.ps1` are files in this repo, fetched by the installer from the release (mirror as fallback), so either can be updated without re-running the installer: `Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.4/datum-status.ps1 -OutFile C:\XorDatum\datum-status.ps1`.
 
