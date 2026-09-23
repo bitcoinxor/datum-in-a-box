@@ -21,7 +21,7 @@ sha256sum snapshot-$H.tar.zst > snapshot-$H.sha256
 
 ## Notes
 
-- Refresh roughly weekly — the older the snapshot, the more each box syncs forward.
+- Refresh every two days — the older the snapshot, the more each box syncs forward.
 - **Decentralisation is preserved:** every box still validates each block *forward* from the snapshot.
   It trusts the pruned *history* (same model as Bitcoin's pruned bootstraps), verifies the *future*.
 - If the fork's Knots build supports **assumeutxo**, prefer a signed UTXO snapshot — cryptographically

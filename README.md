@@ -188,7 +188,7 @@ sudo -u knots bitcoin-cli -datadir=/var/lib/knots getblockchaininfo | grep -E 'b
 
 **From scratch this takes 1–3 days on a 2-core VPS** (the full Bitcoin history up to the fork,
 plus the fork blocks). It runs unattended; do step 4 meanwhile. **Or skip it with the snapshot** — a
-copy of our node's verified pruned chain (~10 GB, rebuilt weekly; `latest.json` names the current
+copy of our node's verified pruned chain (~10 GB, rebuilt every two days; `latest.json` names the current
 one). You trust this copy of history up to the snapshot height, verify its checksum, and your node
 verifies every block after it — the usual bootstrap trust model. Fetch, verify, swap in, confirm:
 

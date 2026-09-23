@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # snapshot-make.sh - build a pruned-chain snapshot from this node and publish it to R2.
-# Pauses the node for the tar (about a minute), then restarts it. Weekly via snapshot-make.timer.
+# Pauses the node for the tar (about a minute), then restarts it. Every two days via snapshot-make.timer.
 set -euo pipefail
 set -a; . /etc/xorpool-snapshot.env; set +a
 export RCLONE_CONFIG_R2_TYPE=s3 RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
