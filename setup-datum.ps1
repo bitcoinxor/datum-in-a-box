@@ -20,7 +20,7 @@ param([string]$ExistingNode = "")
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.7.4"
+$SETUP_VERSION = "v1.7.5"
 $KNOTS_VER  = "29.4.2.knots20260508"
 $RATUM_VER  = "0.1.28"
 # The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
@@ -30,6 +30,10 @@ $KNOTS_SHA256 = "8fa3445a0f3ecc7d1f9e4f4778e44c786883437ac781902a38135be5ea0a892
 $RATUM_SHA256 = "0ccbbbfb2bec452243d72a04f61e8a931a316e3e720ebd3f228d313ee5cef63a"   # ratum-gateway-0.1.28-x86_64-windows.zip
 $MIRROR = "https://snapshot.xorpool.com/mirror"   # same files, for networks where GitHub's release downloads fail (China)
 $VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"   # the gateway needs Microsoft's VC++ runtime (vcruntime140.dll); a bare Windows 10 lacks it
+# Windows 10's built-in tar cannot read the zstd snapshot (Windows 11's can). When it cannot, this zstd build (facebook/zstd's
+# official Windows release, checksum pinned from the file as published) unpacks it; the exe is static, nothing else is installed.
+$ZSTD_URL = "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip"
+$ZSTD_SHA256 = "acb4e8111511749dc7a3ebedca9b04190e37a17afeb73f55d4425dbf0b90fad9"
 # Everything the gateway (and datum-status) asks the node for. With an owner's own Bitcoin Knots the gateway's RPC login is limited to
 # exactly these, so it can never reach the wallet calls (rpcwhitelist). Union of ratum-gateway 0.1.28's calls + the status script's.
 $GW_RPC_ALLOW = "getblocktemplate,submitblock,getblock,getbestblockhash,getblockhash,getblockchaininfo,getblockcount,getnetworkinfo,getmininginfo,getmempoolinfo,getconnectioncount,waitforblockheight,preciousblock,uptime"
@@ -106,12 +110,25 @@ function Test-Address([string]$a) {
 }
 
 function Get-Sha256([string]$path) { (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLower() }
-function Download([string]$url, [string]$out) {
-  try { Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; return }
-  catch { $first = $_.Exception.Message }
-  if ($url -like "https://github.com/*" -or $url -like "https://raw.githubusercontent.com/*") {   # GitHub often fails from China: same file from our mirror (binaries keep their pinned checksum)
-    $alt = "$MIRROR/" + ($url.Split('/')[-1]); Warn "GitHub download failed ($first); trying the mirror $alt"
-    try { Invoke-WebRequest -Uri $alt -OutFile $out -UseBasicParsing -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }; return } catch { $first = $_.Exception.Message }
+$script:githubFailed = $false   # once GitHub has failed or stalled in this run, every later GitHub download goes to the mirror first
+function Fetch([string]$url, [string]$out) {   # one attempt; a server that never answers is an error after 60 s instead of a hang
+  Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 60 -Headers @{ "User-Agent" = "setup-datum/$SETUP_VERSION" }
+}
+function Download([string]$url, [string]$out, [string]$sha256 = "") {
+  # A file already in place with the expected checksum (a previous run that failed later) is not fetched again.
+  if ($sha256 -and (Test-Path $out) -and ((Get-Sha256 $out) -eq $sha256)) { Say "  (already downloaded, checksum ok)"; return }
+  $isGithub = ($url -like "https://github.com/*" -or $url -like "https://raw.githubusercontent.com/*")
+  $alt = if ($isGithub) { "$MIRROR/" + ($url.Split('/')[-1]) } else { "" }
+  $order = if ($isGithub -and $script:githubFailed) { @($alt, $url) } elseif ($isGithub) { @($url, $alt) } else { @($url) }
+  $first = ""
+  foreach ($u in $order) {
+    try { Fetch $u $out; return }
+    catch {
+      $msg = $_.Exception.Message; if (-not $first) { $first = $msg }
+      if ($u -eq $url -and $isGithub) { $script:githubFailed = $true; Warn "GitHub download failed ($msg); trying the mirror $alt" }
+      elseif ($u -eq $alt) { Warn "mirror download failed ($msg)" }
+      Remove-Item $out -Force -ErrorAction SilentlyContinue
+    }
   }
   Die "download failed: $url ($first)"
 }
@@ -323,7 +340,7 @@ elseif ($curKnots -match [regex]::Escape("v$KNOTS_VER")) { Ok "Bitcoin Knots v$K
 else {
   Say "downloading Bitcoin Knots v$KNOTS_VER (~50 MB)..."
   $kzip = "bitcoin-$KNOTS_VER-win64-pgpverifiable.zip"; $kurl = "https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
-  Download "$kurl/$kzip" "$TMP\$kzip"
+  Download "$kurl/$kzip" "$TMP\$kzip" $KNOTS_SHA256
   if ((Get-Sha256 "$TMP\$kzip") -ne $KNOTS_SHA256) { Remove-Item "$TMP\$kzip" -Force; Die "checksum MISMATCH on $kzip - not installing it" }
   Expand-Archive -Path "$TMP\$kzip" -DestinationPath "$TMP\knots" -Force
   $src = Get-ChildItem "$TMP\knots" -Recurse -Filter bitcoind.exe | Select-Object -First 1
@@ -346,7 +363,7 @@ if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already inst
 else {
   Say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
   $rzip = "ratum-gateway-$RATUM_VER-x86_64-windows.zip"; $rurl = "https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
-  Download "$rurl/$rzip" "$TMP\$rzip"
+  Download "$rurl/$rzip" "$TMP\$rzip" $RATUM_SHA256
   if ((Get-Sha256 "$TMP\$rzip") -ne $RATUM_SHA256) { Remove-Item "$TMP\$rzip" -Force; Die "checksum MISMATCH on $rzip - not installing it" }
   Expand-Archive -Path "$TMP\$rzip" -DestinationPath "$TMP\ratum" -Force
   $src = Get-ChildItem "$TMP\ratum" -Recurse -Filter ratum-gateway.exe | Select-Object -First 1
@@ -545,16 +562,31 @@ if ($EXT) {
 if ($doSnapshot) {
   Say ""; Say "Downloading the chain snapshot ($([int]($snap.size_bytes/1GB)) GB) - this is the long part, a few minutes on a good link..."
   $f = "$TMP\$($snap.file)"
-  try { Start-BitsTransfer -Source "https://snapshot.xorpool.com/$($snap.file)" -Destination $f -DisplayName "chain snapshot" -Description "$($snap.file)" }
-  catch { Warn "BITS download failed ($($_.Exception.Message)); trying a plain download"; Download "https://snapshot.xorpool.com/$($snap.file)" $f }
+  if ((Test-Path $f) -and ((Get-Sha256 $f) -eq $snap.sha256.ToLower())) { Say "  (already downloaded, checksum ok)" }   # a run that died at the unpack step keeps the file
+  else {
+    try { Start-BitsTransfer -Source "https://snapshot.xorpool.com/$($snap.file)" -Destination $f -DisplayName "chain snapshot" -Description "$($snap.file)" }
+    catch { Warn "BITS download failed ($($_.Exception.Message)); trying a plain download"; Download "https://snapshot.xorpool.com/$($snap.file)" $f }
+  }
   Say "verifying checksum..."
   if ((Get-Sha256 $f) -ne $snap.sha256.ToLower()) { Remove-Item $f -Force; Die "snapshot checksum MISMATCH - not using it. Run the script again to re-download." }
   Ok "checksum matches"
   StopAll
   Remove-Item "$NODE\blocks", "$NODE\chainstate" -Recurse -Force -ErrorAction SilentlyContinue
   $tar = "$env:SystemRoot\System32\tar.exe"
-  & $tar -xf $f -C $NODE
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$NODE\chainstate")) { Die "could not extract the snapshot (this Windows tar may lack zstd support). Re-run the script and answer n to the snapshot; the node will sync from scratch." }
+  $tarZstd = $false; try { $tarZstd = ((& $tar --version 2>&1) -join " ") -match "libzstd" } catch {}
+  if ($tarZstd) { & $tar -xf $f -C $NODE }
+  else {
+    # Windows 10: its tar has no zstd. Fetch the pinned zstd build and pipe it into tar inside cmd (a cmd pipe is binary-safe; a PowerShell pipe is not).
+    Say "  this Windows tar cannot read zstd; fetching the zstd tool (1.7 MB) to unpack the snapshot..."
+    $zzip = "$TMP\zstd-v1.5.7-win64.zip"; Download $ZSTD_URL $zzip $ZSTD_SHA256
+    if ((Get-Sha256 $zzip) -ne $ZSTD_SHA256) { Remove-Item $zzip -Force; Die "checksum MISMATCH on the zstd download - not using it" }
+    Expand-Archive -Path $zzip -DestinationPath "$TMP\zstd" -Force
+    $zexe = Get-ChildItem "$TMP\zstd" -Recurse -Filter zstd.exe | Select-Object -First 1
+    if (-not $zexe) { Die "zstd.exe not found in the zstd archive" }
+    Copy-Item $zexe.FullName "$BIN\zstd.exe" -Force
+    & "$env:SystemRoot\System32\cmd.exe" /c "`"$BIN\zstd.exe`" -dc `"$f`" | `"$tar`" -xf - -C `"$NODE`""
+  }
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$NODE\chainstate")) { Die "could not extract the snapshot. Re-run the script and answer n to the snapshot; the node will sync from scratch." }
   Remove-Item $f -Force
   Start-ScheduledTask -TaskName "XorDatum Node"; Start-Sleep 3; Start-ScheduledTask -TaskName "XorDatum Gateway"
   $got = ""; for ($i = 0; $i -lt 90; $i++) { try { $got = (NodeCli getblockhash "$($snap.height)"); if ($got) { break } } catch {}; Start-Sleep 2 }

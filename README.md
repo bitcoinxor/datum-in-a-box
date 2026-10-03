@@ -42,13 +42,12 @@ the same thing.
 the same questions, Bitcoin Knots and ratum-gateway from their official Windows builds (checksums
 verified), installed under `C:\XorDatum`, both running as scheduled tasks that start with Windows
 (no login needed), the one firewall rule for port 23334 on private networks, and the chain snapshot
-if you want it (Windows 11's built-in `tar` reads zstd; Windows 10's does not, so there the node syncs
-from scratch). Open PowerShell **as administrator** and paste:
+if you want it (on Windows 10, whose built-in `tar` cannot read zstd, the installer fetches the zstd tool for it). Open PowerShell **as administrator** and paste:
 
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.4/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.5/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 

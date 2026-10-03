@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.5 — 2026-10-02
+- Windows: a download that stalls (GitHub from China sat for 20 minutes on the first byte) now times out after 60 s and falls through to the mirror, and once GitHub has failed in a run every later GitHub download tries the mirror first. A build already in the temp folder with the right checksum is not fetched again, so a run that died after a download does not repeat it.
+- Windows: a snapshot already downloaded by a run that died at the unpack step is reused when its checksum matches, not fetched again.
+- Windows 10: the chain snapshot now unpacks. Windows 10's built-in `tar` cannot read zstd (Windows 11's can); when it cannot, the installer fetches facebook/zstd's official Windows build (checksum pinned) and pipes it into `tar`. Before, the snapshot step failed after the 10 GB download and the node had to sync from scratch.
+
 ## v1.7.4 — 2026-09-21
 - Linux and macOS: the node's `dbcache` is now sized in three tiers, 600 below 3.5 GB RAM, 1000 from 3.5 GB, 2000 from 7 GB (was 2000 from 3.5 GB, which on a 4 GB machine slowly crowds out the page cache the node needs to connect blocks fast). Existing installs: `sudo datum-policy set dbcache=1000 --yes`.
 - Windows: `datum-status` shows which pool the gateway works with and whether the link to it is up (`pool: Bitcoin Xor at hk.datum.xorpool.com:28915   link UP`). Shares accepted on the PC count only while that link is up, and a miner whose gateway had lost its pool link could not tell from the old output.
