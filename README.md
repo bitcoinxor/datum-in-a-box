@@ -46,10 +46,15 @@ if you want it (Windows 11's built-in `tar` reads zstd; Windows 10's does not, s
 from scratch). Open PowerShell **as administrator** and paste:
 
 ```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd $env:USERPROFILE\Downloads
 Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.4/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
+
+The first line makes older Windows 10 builds use TLS 1.2 for the download (without it: "the underlying
+connection was closed"). If GitHub is unreachable from your network, the same file is at
+`https://snapshot.xorpool.com/mirror/setup-datum.ps1`.
 
 Check on it any time with `powershell -ExecutionPolicy Bypass -File C:\XorDatum\datum-status.ps1`.
 
