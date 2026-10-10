@@ -27,8 +27,11 @@ set -euo pipefail
 #                              DATUM_SNAPSHOT     1 (default) fetch the chain snapshot, 0 sync from scratch
 #                              DATUM_XORDESK      1 install Xor Desk (local-only), 0 (default) skip it
 #         --snapshot         with --noninteractive: fetch the chain snapshot if the node is behind it
+#         --update-gateway   only bring ratum-gateway to this script's release and restart it: no questions, the node,
+#                            configs and chain data untouched (for an install made by this script)
 NONINT=0; WANT_SNAP=0
-for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
+UPDATE_GW=0
+for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; --update-gateway) UPDATE_GW=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
 SETUP_VERSION="v1.8.0"
 KNOTS_VER="29.4.2.knots20260508"
@@ -88,6 +91,42 @@ confirm() {  # confirm "question" -> returns 0 on y/yes
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Fetch ratum-gateway $RATUM_VER (checksum verified against the release's .sha256) into /usr/local/bin, unless it is already
+# that version. Runs in the current directory, which the callers make a temp dir.
+RURL="https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
+install_gateway() {
+  local RTAR="ratum-gateway-$RATUM_VER-$RATUM_ARCH.tar.gz" BIN
+  if /usr/local/bin/ratum-gateway --version 2>/dev/null | grep -q " $RATUM_VER "; then ok "ratum-gateway $RATUM_VER already installed"; return; fi
+  say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
+  curl -fsSLo "$RTAR" "$RURL/$RTAR" || die "download failed: $RURL/$RTAR"
+  curl -fsSLo "$RTAR.sha256" "$RURL/$RTAR.sha256" || die "download failed: $RTAR.sha256"
+  # the .sha256 file may name the file with or without a path; compare the digest itself
+  [ "$(sha256sum "$RTAR" | cut -d' ' -f1)" = "$(cut -d' ' -f1 "$RTAR.sha256")" ] || die "checksum MISMATCH on $RTAR - not installing it"
+  tar xzf "$RTAR"
+  BIN=$(find . -type f -name ratum-gateway | head -1); [ -n "$BIN" ] || die "ratum-gateway binary not found in the archive"
+  install -m 755 "$BIN" /usr/local/bin/ratum-gateway
+  ok "$(/usr/local/bin/ratum-gateway --version 2>&1 | head -1)"
+}
+
+# Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
+# port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
+check_pool_link() {  # check_pool_link host port
+  local LINK="" i GWLOG LINKFAIL=0
+  for i in $(seq 1 20); do
+    LINK=$(curl -s -m 3 http://127.0.0.1:8000/stats.json | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+    [ "$LINK" = "Connected and Ready" ] && break; sleep 2
+  done
+  # while it cannot complete the handshake the gateway logs "connecting to DATUM pool" / "DATUM connection ended" in a loop
+  GWLOG=$(journalctl -u ratum-gateway --since "-90s" --no-pager -o cat 2>/dev/null || true)   # into a variable: "journalctl | grep -q" dies of SIGPIPE under pipefail
+  case "$GWLOG" in *"DATUM connection ended"*|*"DATUM pool is unreachable"*) LINKFAIL=1;; esac
+  if [ "$LINK" = "Connected and Ready" ]; then ok "pool link up: $1:$2 answered and proved its key"
+  elif [ "$LINKFAIL" -eq 1 ]; then
+    warn "the gateway cannot complete the handshake with $1:$2. Either that host:port is not a DATUM pool,"
+    say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
+    say  "         Check the three values with the pool, then run this script again. (gateway log: journalctl -u ratum-gateway -n 30)"
+  else say "  gateway status: ${LINK:-not answering yet} - normal while the node is still syncing; datum-status shows the pool link later"; fi
+}
+
 # ---------------------------------------------------------------- preflight
 [ "$(id -u)" -eq 0 ] || die "run as root:  sudo bash $0"
 . /etc/os-release 2>/dev/null || die "cannot read /etc/os-release - this script supports Ubuntu and Debian"
@@ -103,6 +142,20 @@ have systemctl || die "systemd is required"
 say ""
 say "${bold}Bitcoin Xor - DATUM setup${off}   ${dim}Knots v$KNOTS_VER + ratum-gateway $RATUM_VER on ${PRETTY_NAME:-$ID} ($ARCH)${off}"
 say ""
+
+if [ "$UPDATE_GW" -eq 1 ]; then
+  # Gateway update only: the binary this release names, a restart, the handshake check. Nothing else is read or written.
+  [ -f "$GW_CONF" ] && [ -f /etc/systemd/system/ratum-gateway.service ] || die "no gateway from this script found here (no $GW_CONF); run the script without --update-gateway to install"
+  have python3 || { apt-get -qq update && apt-get -qq -y install python3 >/dev/null; }
+  say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $(/usr/local/bin/ratum-gateway --version 2>&1 | head -1))"
+  TMP=$(mktemp -d); cd "$TMP"; install_gateway; cd /; rm -rf "$TMP"
+  systemctl restart ratum-gateway; sleep 2
+  systemctl is-active --quiet ratum-gateway || die "the gateway did not start - see: journalctl -u ratum-gateway -n 50"
+  read -r GH GP <<<"$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["datum"]; print(d.get("pool_host",""), d.get("pool_port",""))' "$GW_CONF" 2>/dev/null || echo "? ?")"
+  check_pool_link "$GH" "$GP"
+  say ""; [ -x /usr/local/bin/datum-status ] && /usr/local/bin/datum-status || true
+  trap - EXIT; exit 0
+fi
 
 # Machine checks (informative; only disk is a hard stop)
 MEM_MB=$(awk '/MemTotal/{printf "%d",$2/1024}' /proc/meminfo)
@@ -370,21 +423,7 @@ else
   ok "$(/usr/local/bin/bitcoind --version | head -1)"
 fi
 
-RURL="https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
-RTAR="ratum-gateway-$RATUM_VER-$RATUM_ARCH.tar.gz"
-if /usr/local/bin/ratum-gateway --version 2>/dev/null | grep -q " $RATUM_VER "; then
-  ok "ratum-gateway $RATUM_VER already installed"
-else
-  say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
-  curl -fsSLo "$RTAR" "$RURL/$RTAR" || die "download failed: $RURL/$RTAR"
-  curl -fsSLo "$RTAR.sha256" "$RURL/$RTAR.sha256" || die "download failed: $RTAR.sha256"
-  # the .sha256 file may name the file with or without a path; compare the digest itself
-  [ "$(sha256sum "$RTAR" | cut -d' ' -f1)" = "$(cut -d' ' -f1 "$RTAR.sha256")" ] || die "checksum MISMATCH on $RTAR - not installing it"
-  tar xzf "$RTAR"
-  BIN=$(find . -type f -name ratum-gateway | head -1); [ -n "$BIN" ] || die "ratum-gateway binary not found in the archive"
-  install -m 755 "$BIN" /usr/local/bin/ratum-gateway
-  ok "$(/usr/local/bin/ratum-gateway --version 2>&1 | head -1)"
-fi
+install_gateway   # defined with the helpers: the release named at the top, checksum verified, into /usr/local/bin
 cd /
 
 # node config - the chain data (if any) is untouched. This file is rewritten on every run; the owner's own policy lives in
@@ -593,22 +632,7 @@ if [ "$SNAP" -eq 1 ]; then
   if [ "${got:-}" = "$SNAP_HASH" ]; then ok "node started from the snapshot at height $SNAP_H; block hash verified"
   else warn "could not verify block $SNAP_H against the published hash yet (node still starting?) - check later with: datum-status"; fi
 fi
-# Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
-# port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
-LINK=""
-for i in $(seq 1 20); do
-  LINK=$(curl -s -m 3 http://127.0.0.1:8000/stats.json | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
-  [ "$LINK" = "Connected and Ready" ] && break; sleep 2
-done
-# while it cannot complete the handshake the gateway logs "connecting to DATUM pool" / "DATUM connection ended" in a loop
-LINKFAIL=0; GWLOG=$(journalctl -u ratum-gateway --since "-90s" --no-pager -o cat 2>/dev/null || true)   # into a variable: "journalctl | grep -q" dies of SIGPIPE under pipefail
-case "$GWLOG" in *"DATUM connection ended"*|*"DATUM pool is unreachable"*) LINKFAIL=1;; esac
-if [ "$LINK" = "Connected and Ready" ]; then ok "pool link up: $POOL_HOST:$POOL_PORT answered and proved its key"
-elif [ "$LINKFAIL" -eq 1 ]; then
-  warn "the gateway cannot complete the handshake with $POOL_HOST:$POOL_PORT. Either that host:port is not a DATUM pool,"
-  say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
-  say  "         Check the three values with the pool, then run this script again. (gateway log: journalctl -u ratum-gateway -n 30)"
-else say "  gateway status: ${LINK:-not answering yet} - normal while the node is still syncing; datum-status shows the pool link later"; fi
+check_pool_link "$POOL_HOST" "$POOL_PORT"
 trap - EXIT
 MYIP=$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
 

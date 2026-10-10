@@ -36,6 +36,19 @@ sudo bash setup-datum.sh
 Prefer to see exactly what happens, or on a different distro? Keep reading — the manual steps are
 the same thing.
 
+## Updating only the gateway
+
+When a new ratum-gateway release is pinned here, bring an existing install to it without re-answering anything:
+
+```bash
+sudo bash setup-datum.sh --update-gateway        # Linux and macOS
+powershell -ExecutionPolicy Bypass -File setup-datum.ps1 -UpdateGateway   # Windows, as administrator
+```
+
+It downloads the release (checksum verified), restarts the gateway, checks the pool handshake and prints `datum-status`.
+Node, configs and chain data are not touched. Running the installer without the flag updates everything, with every
+previous answer offered as the default.
+
 ## Cloud, one paste — no terminal at all
 
 [`cloud-init.yaml`](cloud-init.yaml) builds the whole gateway on a freshly created cloud server. Edit the three

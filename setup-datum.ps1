@@ -14,9 +14,10 @@
   Usage:  right-click PowerShell -> Run as administrator, then:
           powershell -ExecutionPolicy Bypass -File setup-datum.ps1
           add  -ExistingNode "C:\path\to\Bitcoin"  to name the data folder of a node the script did not find by itself
+          add  -UpdateGateway  to only bring ratum-gateway to this script's release and restart it (no questions, node untouched)
   Source: https://github.com/bitcoinxor/datum-in-a-box   Questions: https://t.me/bitcoinxor
 #>
-param([string]$ExistingNode = "")
+param([string]$ExistingNode = "", [switch]$UpdateGateway)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -148,6 +149,53 @@ function StopAll {
   StopTask "XorDatum Node"; Get-Process bitcoind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
+function Install-Gateway {   # ratum-gateway $RATUM_VER (checksum pinned) into $BIN, plus the VC++ runtime it needs; uses $TMP
+  # ratum. First the Microsoft VC++ runtime it is linked against: without vcruntime140.dll the exe exits at once, printing nothing
+  # (seen on a bare Windows 10). The runtime installer comes from Microsoft and is checked for Microsoft's Authenticode signature.
+  if (-not (Test-Path "$env:SystemRoot\System32\vcruntime140.dll")) {
+    Say "installing the Microsoft Visual C++ runtime (the gateway needs it; ~25 MB from Microsoft)..."
+    $vcr = "$TMP\vc_redist.x64.exe"; Download $VCREDIST_URL $vcr
+    $sig = Get-AuthenticodeSignature $vcr
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Remove-Item $vcr -Force; Die "the VC++ runtime installer is not signed by Microsoft - not running it" }
+    $pr = Start-Process $vcr -ArgumentList "/install /quiet /norestart" -Wait -PassThru
+    if (-not (Test-Path "$env:SystemRoot\System32\vcruntime140.dll")) { Die "the VC++ runtime did not install (exit code $($pr.ExitCode)). Install it by hand from $VCREDIST_URL and run this script again." }
+    Ok "Microsoft Visual C++ runtime installed"
+  }
+  $curRatum = ""; if (Test-Path "$BIN\ratum-gateway.exe") { try { $curRatum = (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {} }
+  if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already installed" }
+  else {
+    Say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
+    $rzip = "ratum-gateway-$RATUM_VER-x86_64-windows.zip"; $rurl = "https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
+    Download "$rurl/$rzip" "$TMP\$rzip" $RATUM_SHA256
+    if ((Get-Sha256 "$TMP\$rzip") -ne $RATUM_SHA256) { Remove-Item "$TMP\$rzip" -Force; Die "checksum MISMATCH on $rzip - not installing it" }
+    Expand-Archive -Path "$TMP\$rzip" -DestinationPath "$TMP\ratum" -Force
+    $src = Get-ChildItem "$TMP\ratum" -Recurse -Filter ratum-gateway.exe | Select-Object -First 1
+    if (-not $src) { Die "ratum-gateway.exe not found in the archive" }
+    Copy-Item $src.FullName "$BIN\ratum-gateway.exe" -Force
+    $v = ""; try { $v = "" + (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {}
+    if ($v -notmatch [regex]::Escape($RATUM_VER)) { Die "ratum-gateway.exe does not run on this PC (exit code $LASTEXITCODE, output: '$v'). An antivirus may be blocking it; look for a quarantine entry for C:\XorDatum\bin\ratum-gateway.exe, restore it and add an exclusion, then run this script again." }
+    Ok $v
+  }
+}
+
+function Check-PoolLink($poolHost, $poolPort, $logMark, $rounds) {   # waits up to $rounds x 2 s for the gateway's pool link, then says what it saw
+  # Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
+  # port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
+  $link = ""
+  for ($i = 0; $i -lt $rounds; $i++) {
+    try { $link = "" + (Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3).status } catch { $link = "" }
+    if ($link -eq "Connected and Ready") { break }; Start-Sleep 2
+  }
+  $newLog = ""
+  try { $fs = [System.IO.File]::Open("$LOGS\gateway.log", 'Open', 'Read', 'ReadWrite'); [void]$fs.Seek([Math]::Min($logMark, $fs.Length), 'Begin'); $sr = New-Object System.IO.StreamReader($fs); $newLog = $sr.ReadToEnd(); $sr.Close(); $fs.Close() } catch {}
+  if ($link -eq "Connected and Ready") { Ok "pool link up: ${poolHost}:$poolPort answered and proved its key" }
+  elseif ($newLog -match 'DATUM connection ended|DATUM pool is unreachable') {
+    Warn "the gateway cannot complete the handshake with ${poolHost}:$poolPort. Either that host:port is not a DATUM pool,"
+    Say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
+    Say  "         Check the three values with the pool, then run this script again. (gateway log: $LOGS\gateway.log)"
+  } else { Say ("  gateway status: " + $(if ($link) { $link } else { "not answering yet" }) + " - normal while the node is still syncing; datum-status shows the pool link later") }
+}
+
 # ---------------------------------------------------------------- preflight
 if (-not [Environment]::Is64BitOperatingSystem) { Die "64-bit Windows is required" }
 $os = Get-CimInstance Win32_OperatingSystem
@@ -157,6 +205,20 @@ $drive = (Get-Item ($ROOT.Substring(0, 2) + "\")).PSDrive
 $freeGB = [int]((Get-PSDrive $ROOT.Substring(0, 1)).Free / 1GB)
 $cpus = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 Say "Machine: $cpus CPU, $memMB MB RAM, $freeGB GB free on $($ROOT.Substring(0,2))"
+if ($UpdateGateway) {
+  # Gateway update only: the build this release names, a restart of its task, the handshake check. Nothing else is read or written.
+  if (-not (Test-Path $GW_CONF) -or -not (TaskExists "XorDatum Gateway")) { Die "no gateway from this script found here (no $GW_CONF or no 'XorDatum Gateway' task); run the script without -UpdateGateway to install" }
+  $cur = ""; try { $cur = "" + (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {}
+  Say ""; Say "Updating the gateway to ratum-gateway $RATUM_VER (current: $cur)"
+  New-Item -ItemType Directory -Force -Path $TMP | Out-Null
+  StopGateway; Install-Gateway; Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+  $logMark = if (Test-Path "$LOGS\gateway.log") { (Get-Item "$LOGS\gateway.log").Length } else { 0 }
+  Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 3
+  $g = $null; try { $g = Get-Content $GW_CONF -Raw | ConvertFrom-Json } catch {}
+  Check-PoolLink $(if ($g) { "" + $g.datum.pool_host } else { "?" }) $(if ($g) { "" + $g.datum.pool_port } else { "?" }) $logMark 20
+  Say ""; if (Test-Path "$ROOT\datum-status.ps1") { & powershell -ExecutionPolicy Bypass -File "$ROOT\datum-status.ps1" }
+  exit 0
+}
 
 # ---------------------------------------------------------------- a Bitcoin Knots that is already on this PC?
 # The wallet program (bitcoin-qt) or a bitcoind that is not ours. Found by its running process (data folder from -datadir=
@@ -347,32 +409,7 @@ else {
   Copy-Item $src.FullName "$BIN\bitcoind.exe" -Force; Copy-Item (Join-Path $src.DirectoryName "bitcoin-cli.exe") "$BIN\bitcoin-cli.exe" -Force
   Ok ((& "$BIN\bitcoind.exe" --version | Select-Object -First 1))
 }
-# ratum. First the Microsoft VC++ runtime it is linked against: without vcruntime140.dll the exe exits at once, printing nothing
-# (seen on a bare Windows 10). The runtime installer comes from Microsoft and is checked for Microsoft's Authenticode signature.
-if (-not (Test-Path "$env:SystemRoot\System32\vcruntime140.dll")) {
-  Say "installing the Microsoft Visual C++ runtime (the gateway needs it; ~25 MB from Microsoft)..."
-  $vcr = "$TMP\vc_redist.x64.exe"; Download $VCREDIST_URL $vcr
-  $sig = Get-AuthenticodeSignature $vcr
-  if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Remove-Item $vcr -Force; Die "the VC++ runtime installer is not signed by Microsoft - not running it" }
-  $pr = Start-Process $vcr -ArgumentList "/install /quiet /norestart" -Wait -PassThru
-  if (-not (Test-Path "$env:SystemRoot\System32\vcruntime140.dll")) { Die "the VC++ runtime did not install (exit code $($pr.ExitCode)). Install it by hand from $VCREDIST_URL and run this script again." }
-  Ok "Microsoft Visual C++ runtime installed"
-}
-$curRatum = ""; if (Test-Path "$BIN\ratum-gateway.exe") { try { $curRatum = (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {} }
-if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already installed" }
-else {
-  Say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
-  $rzip = "ratum-gateway-$RATUM_VER-x86_64-windows.zip"; $rurl = "https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
-  Download "$rurl/$rzip" "$TMP\$rzip" $RATUM_SHA256
-  if ((Get-Sha256 "$TMP\$rzip") -ne $RATUM_SHA256) { Remove-Item "$TMP\$rzip" -Force; Die "checksum MISMATCH on $rzip - not installing it" }
-  Expand-Archive -Path "$TMP\$rzip" -DestinationPath "$TMP\ratum" -Force
-  $src = Get-ChildItem "$TMP\ratum" -Recurse -Filter ratum-gateway.exe | Select-Object -First 1
-  if (-not $src) { Die "ratum-gateway.exe not found in the archive" }
-  Copy-Item $src.FullName "$BIN\ratum-gateway.exe" -Force
-  $v = ""; try { $v = "" + (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {}
-  if ($v -notmatch [regex]::Escape($RATUM_VER)) { Die "ratum-gateway.exe does not run on this PC (exit code $LASTEXITCODE, output: '$v'). An antivirus may be blocking it; look for a quarantine entry for C:\XorDatum\bin\ratum-gateway.exe, restore it and add an exclusion, then run this script again." }
-  Ok $v
-}
+Install-Gateway
 
 # node config (chain data untouched). This file is rewritten on every run; the owner's own relay / block-building policy
 # lives in policy.conf, included at the end and never touched again once it exists. The main file beats an included
@@ -595,21 +632,7 @@ if ($doSnapshot) {
 }
 Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
 
-# Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
-# port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
-$link = ""
-for ($i = 0; $i -lt $(if ($EXT -and $extVersion) { 40 } else { 20 }); $i++) {
-  try { $link = "" + (Invoke-RestMethod http://127.0.0.1:8000/stats.json -TimeoutSec 3).status } catch { $link = "" }
-  if ($link -eq "Connected and Ready") { break }; Start-Sleep 2
-}
-$newLog = ""
-try { $fs = [System.IO.File]::Open("$LOGS\gateway.log", 'Open', 'Read', 'ReadWrite'); [void]$fs.Seek([Math]::Min($logMark, $fs.Length), 'Begin'); $sr = New-Object System.IO.StreamReader($fs); $newLog = $sr.ReadToEnd(); $sr.Close(); $fs.Close() } catch {}
-if ($link -eq "Connected and Ready") { Ok "pool link up: ${POOL_HOST}:$POOL_PORT answered and proved its key" }
-elseif ($newLog -match 'DATUM connection ended|DATUM pool is unreachable') {
-  Warn "the gateway cannot complete the handshake with ${POOL_HOST}:$POOL_PORT. Either that host:port is not a DATUM pool,"
-  Say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
-  Say  "         Check the three values with the pool, then run this script again. (gateway log: $LOGS\gateway.log)"
-} else { Say ("  gateway status: " + $(if ($link) { $link } else { "not answering yet" }) + " - normal while the node is still syncing; datum-status shows the pool link later") }
+Check-PoolLink $POOL_HOST $POOL_PORT $logMark $(if ($EXT -and $extVersion) { 40 } else { 20 })
 
 # the address on the interface that carries the default route (the real LAN), not a Hyper-V / WSL / VPN adapter
 $myip = $null

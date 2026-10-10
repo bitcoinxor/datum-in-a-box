@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.8.1 — unreleased
+- **Gateway-only update.** `sudo bash setup-datum.sh --update-gateway` (Linux and macOS) and `powershell -ExecutionPolicy Bypass -File setup-datum.ps1 -UpdateGateway` (Windows) bring ratum-gateway to the release this script names and restart it: no questions, node, configs and chain data untouched, then the pool handshake check and `datum-status`. For an install made by this script.
+
 ## v1.8.0 — 2026-10-10
 - **Cloud, one paste: `cloud-init.yaml`.** Edit three values (payout address, block tag, pool endpoint), paste the file into a provider's "User data" box when creating an Ubuntu server (DigitalOcean, Vultr, Linode, Hetzner, ...), and the server builds itself: firewall (22 + 23334), swap, unattended security updates, then the Linux installer unattended with the snapshot. The result is printed at every ssh login (and in `/root/DATUM-SETUP-RESULT.txt`); the log is `/var/log/datum-cloud-setup.log`. Guide: xorpool.com/datum/setup, "Cloud" tab.
 - Linux: `--noninteractive` takes its answers from the environment when `DATUM_ADDRESS` is set (`DATUM_ADDRESS`, `DATUM_TAG`, `DATUM_POOL`, `DATUM_POOL_PUBKEY`, `DATUM_POOL_URL`, `DATUM_SNAPSHOT`, `DATUM_XORDESK`), each checked exactly as the questions check it; a bad value stops the run before anything is installed. Xor Desk is off by default in that mode.

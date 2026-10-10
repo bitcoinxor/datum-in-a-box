@@ -23,6 +23,10 @@
 #  Mac: no Homebrew, no Xcode tools, no python needed (perl and shasum ship with macOS).
 # =====================================================================================
 set -euo pipefail
+# Flags:  --update-gateway   only bring ratum-gateway to this script's release and restart it: no questions, the node,
+#                            configs and chain data untouched (for an install made by this script)
+UPDATE_GW=0
+for a in "$@"; do case "$a" in --update-gateway) UPDATE_GW=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
 SETUP_VERSION="v1.8.0"
 KNOTS_VER="29.4.2.knots20260508"
@@ -89,6 +93,39 @@ svc_running() { launchctl print "system/$1" 2>/dev/null | grep -q 'state = runni
 svc_stop() {  # unload the service; launchd sends SIGTERM and waits ExitTimeOut before SIGKILL
   launchctl bootout "system/$1" >/dev/null 2>&1 || true
 }
+RURL="https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
+install_gateway() {   # ratum-gateway $RATUM_VER into $BIN, checksum verified; runs in the caller's temp dir
+  local RTAR="ratum-gateway-$RATUM_VER-$RATUM_ARCH.tar.gz" RB
+  if "$BIN/ratum-gateway" --version 2>/dev/null | grep -q " $RATUM_VER "; then ok "ratum-gateway $RATUM_VER already installed"; return; fi
+  say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
+  curl -fsSLo "$RTAR" "$RURL/$RTAR" || die "download failed: $RURL/$RTAR"
+  curl -fsSLo "$RTAR.sha256" "$RURL/$RTAR.sha256" || die "download failed: $RTAR.sha256"
+  [ "$(sha256 "$RTAR")" = "$(cut -d' ' -f1 "$RTAR.sha256")" ] || die "checksum MISMATCH on $RTAR - not installing it"
+  tar xzf "$RTAR"
+  RB=$(find . -type f -name ratum-gateway | head -1); [ -n "$RB" ] || die "ratum-gateway binary not found in the archive"
+  install -m 755 "$RB" "$BIN/ratum-gateway"
+  xattr -d com.apple.quarantine "$BIN/ratum-gateway" 2>/dev/null || true
+  ok "$("$BIN/ratum-gateway" --version 2>&1 | head -1)"
+}
+
+check_pool_link() {  # check_pool_link host port  (reads LOGMARK: the gateway log size before the start)
+  # Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
+  # port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
+  LINK=""
+  for i in $(seq 1 20); do
+    LINK=$(curl -s -m 3 http://127.0.0.1:8000/stats.json | perl -MJSON::PP -e 'local $/; my $d = eval { decode_json(<STDIN>) }; print $d ? ($d->{status} // "") : ""' 2>/dev/null || true)
+    [ "$LINK" = "Connected and Ready" ] && break; sleep 2
+  done
+  GWLOG=$(tail -c +$(( ${LOGMARK:-0} + 1 )) "$LOGS/gateway.log" 2>/dev/null || true)
+  LINKFAIL=0; case "$GWLOG" in *"DATUM connection ended"*|*"DATUM pool is unreachable"*) LINKFAIL=1;; esac
+  if [ "$LINK" = "Connected and Ready" ]; then ok "pool link up: $1:$2 answered and proved its key"
+  elif [ "$LINKFAIL" -eq 1 ]; then
+    warn "the gateway cannot complete the handshake with $1:$2. Either that host:port is not a DATUM pool,"
+    say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
+    say  "         Check the three values with the pool, then run this script again. (gateway log: $LOGS/gateway.log)"
+  else say "  gateway status: ${LINK:-not answering yet} - normal while the node is still syncing; datum-status shows the pool link later"; fi
+}
+
 svc_start() { launchctl bootstrap system "$2" >/dev/null 2>&1 || launchctl kickstart -k "system/$1" >/dev/null 2>&1 || true; }
 stop_all() {
   # gateway first (stateless); then the node, and WAIT for it: a killed node has not flushed its chainstate
@@ -120,6 +157,20 @@ have launchctl || die "launchctl is missing"
 
 say ""
 say "${bold}Bitcoin Xor - DATUM setup for macOS${off}   ${dim}Knots v$KNOTS_VER + ratum-gateway $RATUM_VER on macOS $OSVER ($ARCH)${off}"
+
+if [ "$UPDATE_GW" -eq 1 ]; then
+  # Gateway update only: the binary this release names, a restart of its daemon, the handshake check. Nothing else is read or written.
+  [ -f "$GW_CONF" ] && [ -f "$GW_PLIST" ] || die "no gateway from this script found here (no $GW_CONF); run the script without --update-gateway to install"
+  say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $("$BIN/ratum-gateway" --version 2>&1 | head -1))"
+  TMP=$(mktemp -d); cd "$TMP"; install_gateway; cd /; rm -rf "$TMP"
+  LOGMARK=$(wc -c < "$LOGS/gateway.log" 2>/dev/null | tr -d ' ' || echo 0)
+  svc_stop "$GW_LABEL"; pkill -x ratum-gateway 2>/dev/null || true; svc_start "$GW_LABEL" "$GW_PLIST"; sleep 3
+  GH=$(perl -MJSON::PP -e 'local $/; my $d = decode_json(<STDIN>); print $d->{datum}{pool_host}' < "$GW_CONF" 2>/dev/null || echo "?")
+  GP=$(perl -MJSON::PP -e 'local $/; my $d = decode_json(<STDIN>); print $d->{datum}{pool_port}' < "$GW_CONF" 2>/dev/null || echo "?")
+  check_pool_link "$GH" "$GP"
+  say ""; [ -x "$ROOT/datum-status" ] && "$ROOT/datum-status" || true
+  trap - EXIT; exit 0
+fi
 say ""
 
 MEM_MB=$(( $(sysctl -n hw.memsize) / 1048576 ))
@@ -319,21 +370,7 @@ else
   ok "$("$BIN/bitcoind" --version | head -1)"
 fi
 
-RURL="https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
-RTAR="ratum-gateway-$RATUM_VER-$RATUM_ARCH.tar.gz"
-if "$BIN/ratum-gateway" --version 2>/dev/null | grep -q " $RATUM_VER "; then
-  ok "ratum-gateway $RATUM_VER already installed"
-else
-  say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
-  curl -fsSLo "$RTAR" "$RURL/$RTAR" || die "download failed: $RURL/$RTAR"
-  curl -fsSLo "$RTAR.sha256" "$RURL/$RTAR.sha256" || die "download failed: $RTAR.sha256"
-  [ "$(sha256 "$RTAR")" = "$(cut -d' ' -f1 "$RTAR.sha256")" ] || die "checksum MISMATCH on $RTAR - not installing it"
-  tar xzf "$RTAR"
-  RB=$(find . -type f -name ratum-gateway | head -1); [ -n "$RB" ] || die "ratum-gateway binary not found in the archive"
-  install -m 755 "$RB" "$BIN/ratum-gateway"
-  xattr -d com.apple.quarantine "$BIN/ratum-gateway" 2>/dev/null || true
-  ok "$("$BIN/ratum-gateway" --version 2>&1 | head -1)"
-fi
+install_gateway   # defined with the helpers: the release named at the top, checksum verified, into $BIN
 cd /; rm -rf "$TMP"
 
 # node config - the chain data (if any) is untouched. This file is rewritten on every run; the owner's own relay /
@@ -478,21 +515,7 @@ if [ "$SNAP" -eq 1 ]; then
   if [ "${got:-}" = "$SNAP_HASH" ]; then ok "node started from the snapshot at height $SNAP_H; block hash verified"
   else warn "could not verify block $SNAP_H against the published hash yet (node still starting?) - check later with: datum-status"; fi
 fi
-# Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
-# port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
-LINK=""
-for i in $(seq 1 20); do
-  LINK=$(curl -s -m 3 http://127.0.0.1:8000/stats.json | perl -MJSON::PP -e 'local $/; my $d = eval { decode_json(<STDIN>) }; print $d ? ($d->{status} // "") : ""' 2>/dev/null || true)
-  [ "$LINK" = "Connected and Ready" ] && break; sleep 2
-done
-GWLOG=$(tail -c +$(( ${LOGMARK:-0} + 1 )) "$LOGS/gateway.log" 2>/dev/null || true)
-LINKFAIL=0; case "$GWLOG" in *"DATUM connection ended"*|*"DATUM pool is unreachable"*) LINKFAIL=1;; esac
-if [ "$LINK" = "Connected and Ready" ]; then ok "pool link up: $POOL_HOST:$POOL_PORT answered and proved its key"
-elif [ "$LINKFAIL" -eq 1 ]; then
-  warn "the gateway cannot complete the handshake with $POOL_HOST:$POOL_PORT. Either that host:port is not a DATUM pool,"
-  say  "         it is unreachable from here, or the public key is not that pool's key. Nothing will be mined until it connects."
-  say  "         Check the three values with the pool, then run this script again. (gateway log: $LOGS/gateway.log)"
-else say "  gateway status: ${LINK:-not answering yet} - normal while the node is still syncing; datum-status shows the pool link later"; fi
+check_pool_link "$POOL_HOST" "$POOL_PORT"
 trap - EXIT
 IFACE=$(route -n get 1.1.1.1 2>/dev/null | awk '/interface:/{print $2}'); MYIP=""; [ -n "$IFACE" ] && MYIP=$(ipconfig getifaddr "$IFACE" 2>/dev/null || true)
 
