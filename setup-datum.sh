@@ -5,7 +5,7 @@
 #  Installs, on this machine, everything needed to mine on the Bitcoin BLAKE2b chain with
 #  YOUR OWN block templates:
 #     * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
-#     * ratum-gateway 0.1.28            - DATUM gateway your ASICs connect to on :23334
+#     * ratum-gateway 0.1.66-xor.1     - DATUM gateway your ASICs connect to on :23334
 #     * Xor Desk (optional)             - a local web dashboard for this machine, sends nothing anywhere
 #  and points the gateway at a DATUM pool for the payout split: Bitcoin Xor (xorpool.com, 1% fee) by default,
 #  or any other DATUM pool whose host, port and public key you enter.
@@ -33,9 +33,9 @@ NONINT=0; WANT_SNAP=0
 UPDATE_GW=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; --update-gateway) UPDATE_GW=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.8.0"
+SETUP_VERSION="v1.8.1"
 KNOTS_VER="29.4.2.knots20260508"
-RATUM_VER="0.1.28"
+RATUM_VER="0.1.66-xor.1"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
 XOR_HOST="datum.xorpool.com"
@@ -93,7 +93,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # Fetch ratum-gateway $RATUM_VER (checksum verified against the release's .sha256) into /usr/local/bin, unless it is already
 # that version. Runs in the current directory, which the callers make a temp dir.
-RURL="https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
+RURL="https://github.com/bitcoinxor/xor-ratum/releases/download/v$RATUM_VER"   # our build of iohzrd/ratum: upstream plus the mining.extranonce.subscribe reply pool proxies need
 install_gateway() {
   local RTAR="ratum-gateway-$RATUM_VER-$RATUM_ARCH.tar.gz" BIN
   if /usr/local/bin/ratum-gateway --version 2>/dev/null | grep -q " $RATUM_VER "; then ok "ratum-gateway $RATUM_VER already installed"; return; fi

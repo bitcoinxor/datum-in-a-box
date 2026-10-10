@@ -4,7 +4,7 @@
   ---------------------------------------------------------------------------
   Installs, on this PC, everything needed to mine on the Bitcoin BLAKE2b chain with YOUR OWN block templates:
      * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
-     * ratum-gateway 0.1.28            - the DATUM gateway your ASICs connect to on port 23334
+     * ratum-gateway 0.1.66-xor.1     - the DATUM gateway your ASICs connect to on port 23334
   and points the gateway at the Bitcoin Xor DATUM pool for the payout split (1% fee).
   Both run as scheduled tasks that start with Windows (no login needed). Nothing is sent anywhere.
   Safe to re-run: an existing install is updated in place; chain data is kept.
@@ -21,14 +21,14 @@ param([string]$ExistingNode = "", [switch]$UpdateGateway)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.8.0"
+$SETUP_VERSION = "v1.8.1"
 $KNOTS_VER  = "29.4.2.knots20260508"
-$RATUM_VER  = "0.1.28"
+$RATUM_VER  = "0.1.66-xor.1"
 # The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
 # pinned here, so a download from anywhere (GitHub, or our mirror when GitHub is unreachable) is checked against the
 # authors' values, not against whatever sits next to the file. Update both when bumping a version.
 $KNOTS_SHA256 = "8fa3445a0f3ecc7d1f9e4f4778e44c786883437ac781902a38135be5ea0a892b"   # bitcoin-29.4.2.knots20260508-win64-pgpverifiable.zip
-$RATUM_SHA256 = "0ccbbbfb2bec452243d72a04f61e8a931a316e3e720ebd3f228d313ee5cef63a"   # ratum-gateway-0.1.28-x86_64-windows.zip
+$RATUM_SHA256 = "c5d2197439dcaf095a8f40b94d8bd2e24a3038888821dd2b7882109c0827a628"   # ratum-gateway-0.1.66-xor.1-x86_64-windows.zip
 $MIRROR = "https://snapshot.xorpool.com/mirror"   # same files, for networks where GitHub's release downloads fail (China)
 $VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"   # the gateway needs Microsoft's VC++ runtime (vcruntime140.dll); a bare Windows 10 lacks it
 # Windows 10's built-in tar cannot read the zstd snapshot (Windows 11's can). When it cannot, this zstd build (facebook/zstd's
@@ -36,8 +36,8 @@ $VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"   # the gateway
 $ZSTD_URL = "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip"
 $ZSTD_SHA256 = "acb4e8111511749dc7a3ebedca9b04190e37a17afeb73f55d4425dbf0b90fad9"
 # Everything the gateway (and datum-status) asks the node for. With an owner's own Bitcoin Knots the gateway's RPC login is limited to
-# exactly these, so it can never reach the wallet calls (rpcwhitelist). Union of ratum-gateway 0.1.28's calls + the status script's.
-$GW_RPC_ALLOW = "getblocktemplate,submitblock,getblock,getbestblockhash,getblockhash,getblockchaininfo,getblockcount,getnetworkinfo,getmininginfo,getmempoolinfo,getconnectioncount,waitforblockheight,preciousblock,uptime"
+# exactly these, so it can never reach the wallet calls (rpcwhitelist). Union of ratum-gateway 0.1.66's calls + the status script's.
+$GW_RPC_ALLOW = "getblocktemplate,submitblock,getblock,getblockheader,getbestblockhash,getblockhash,getblockchaininfo,getblockcount,getrawtransaction,getnetworkinfo,getmininginfo,getmempoolinfo,getconnectioncount,waitforblockheight,preciousblock,uptime"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
 $XOR_HOST   = "datum.xorpool.com"; $XOR_PORT = 28915
@@ -165,7 +165,7 @@ function Install-Gateway {   # ratum-gateway $RATUM_VER (checksum pinned) into $
   if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already installed" }
   else {
     Say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
-    $rzip = "ratum-gateway-$RATUM_VER-x86_64-windows.zip"; $rurl = "https://github.com/iohzrd/ratum/releases/download/v$RATUM_VER"
+    $rzip = "ratum-gateway-$RATUM_VER-x86_64-windows.zip"; $rurl = "https://github.com/bitcoinxor/xor-ratum/releases/download/v$RATUM_VER"
     Download "$rurl/$rzip" "$TMP\$rzip" $RATUM_SHA256
     if ((Get-Sha256 "$TMP\$rzip") -ne $RATUM_SHA256) { Remove-Item "$TMP\$rzip" -Force; Die "checksum MISMATCH on $rzip - not installing it" }
     Expand-Archive -Path "$TMP\$rzip" -DestinationPath "$TMP\ratum" -Force

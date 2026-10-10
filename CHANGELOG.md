@@ -1,6 +1,7 @@
 # Changelog
 
-## v1.8.1 — unreleased
+## v1.8.1 — 2026-10-10
+- **ratum-gateway 0.1.66-xor.1** (was upstream 0.1.28): upstream 0.1.66, 39 releases of fixes and DATUM session hardening, plus our one change, a reply to `mining.extranonce.subscribe`, which rental proxies such as MiningRigRentals send and treat as a dead pool when refused. Built by GitHub Actions from github.com/bitcoinxor/xor-ratum (tag `v0.1.66-xor.1`), checksums published there and pinned in the Windows installer; copies on the mirror. The Windows RPC whitelist gains `getblockheader` and `getrawtransaction`, which 0.1.66 calls.
 - **Gateway-only update.** `sudo bash setup-datum.sh --update-gateway` (Linux and macOS) and `powershell -ExecutionPolicy Bypass -File setup-datum.ps1 -UpdateGateway` (Windows) bring ratum-gateway to the release this script names and restart it: no questions, node, configs and chain data untouched, then the pool handshake check and `datum-status`. For an install made by this script.
 
 ## v1.8.0 — 2026-10-10

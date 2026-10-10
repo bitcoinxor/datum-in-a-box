@@ -74,7 +74,7 @@ if you want it (on Windows 10, whose built-in `tar` cannot read zstd, the instal
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.8.0/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.8.1/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -240,14 +240,16 @@ sudo -u knots bitcoin-cli -datadir=/var/lib/knots getblockhash $H; python3 -c 'i
 
 [ratum-gateway](https://github.com/iohzrd/ratum) is an open-source (AGPL) DATUM gateway written
 for this chain: it builds templates from your node and speaks the 164-byte v2 header to BLAKE2b
-hardware. Prebuilt static binaries are on its
-[release page](https://github.com/iohzrd/ratum/releases/tag/v0.1.28).
+hardware. The installers use [our build of it](https://github.com/bitcoinxor/xor-ratum/releases/tag/v0.1.66-xor.1):
+upstream 0.1.66 plus one change, a reply to `mining.extranonce.subscribe`, which rental proxies such as
+MiningRigRentals send and treat as a dead pool when it is refused. Prebuilt static binaries with checksums are on
+that release page.
 
 ```sh
 cd /tmp
-R=0.1.28; A=$(uname -m | sed 's/x86_64/x86_64-linux-musl/; s/aarch64/aarch64-linux-musl/')
-curl -LO https://github.com/iohzrd/ratum/releases/download/v$R/ratum-gateway-$R-$A.tar.gz
-curl -LO https://github.com/iohzrd/ratum/releases/download/v$R/ratum-gateway-$R-$A.tar.gz.sha256
+R=0.1.66-xor.1; A=$(uname -m | sed 's/x86_64/x86_64-linux-musl/; s/aarch64/aarch64-linux-musl/')
+curl -LO https://github.com/bitcoinxor/xor-ratum/releases/download/v$R/ratum-gateway-$R-$A.tar.gz
+curl -LO https://github.com/bitcoinxor/xor-ratum/releases/download/v$R/ratum-gateway-$R-$A.tar.gz.sha256
 sha256sum -c ratum-gateway-$R-$A.tar.gz.sha256      # must print: OK
 tar xzf ratum-gateway-$R-$A.tar.gz
 sudo install -m 755 $(find . -name ratum-gateway -type f | head -1) /usr/local/bin/ratum-gateway
