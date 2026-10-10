@@ -71,7 +71,7 @@ write_files:
         || curl -fsSL --max-time 120 -o /root/setup-datum.sh "https://snapshot.xorpool.com/mirror/setup-datum.sh" \
         || { finish FAILED "could not download the installer (no route to GitHub or the mirror)"; exit 1; }
       if bash /root/setup-datum.sh --noninteractive --snapshot; then
-        finish OK "node and gateway installed; the node is at the chain tip and the gateway is connected to $DATUM_POOL"
+        finish OK "node and gateway installed from the snapshot; the node catches up its last blocks in a few minutes, then the gateway connects to $DATUM_POOL and your rigs get work"
       else
         finish FAILED "the installer stopped; the reason is at the end of the log (bad address or tag, or a download problem)"
         exit 1
