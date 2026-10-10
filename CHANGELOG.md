@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.0 — 2026-10-10
+- **Cloud, one paste: `cloud-init.yaml`.** Edit three values (payout address, block tag, pool endpoint), paste the file into a provider's "User data" box when creating an Ubuntu server (DigitalOcean, Vultr, Linode, Hetzner, ...), and the server builds itself: firewall (22 + 23334), swap, unattended security updates, then the Linux installer unattended with the snapshot. The result is printed at every ssh login (and in `/root/DATUM-SETUP-RESULT.txt`); the log is `/var/log/datum-cloud-setup.log`. Guide: xorpool.com/datum/setup, "Cloud" tab.
+- Linux: `--noninteractive` takes its answers from the environment when `DATUM_ADDRESS` is set (`DATUM_ADDRESS`, `DATUM_TAG`, `DATUM_POOL`, `DATUM_POOL_PUBKEY`, `DATUM_POOL_URL`, `DATUM_SNAPSHOT`, `DATUM_XORDESK`), each checked exactly as the questions check it; a bad value stops the run before anything is installed. Xor Desk is off by default in that mode.
+- Linux and macOS: the version string the installers use to fetch their helper files (Xor Desk, datum-policy) was stuck at v1.6.0; it now follows the release.
+
 ## v1.7.5 — 2026-10-02
 - Windows: a download that stalls (GitHub from China sat for 20 minutes on the first byte) now times out after 60 s and falls through to the mirror, and once GitHub has failed in a run every later GitHub download tries the mirror first. A build already in the temp folder with the right checksum is not fetched again, so a run that died after a download does not repeat it.
 - Windows: a snapshot already downloaded by a run that died at the unpack step is reused when its checksum matches, not fetched again.

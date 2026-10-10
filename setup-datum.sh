@@ -17,12 +17,20 @@
 #  Source: https://github.com/bitcoinxor/datum-in-a-box   Questions: https://t.me/bitcoinxor
 # =====================================================================================
 set -euo pipefail
-# Flags:  --noninteractive   take every answer from /etc/xordesk.json (written by a previous run) - used by Xor Desk
+# Flags:  --noninteractive   take every answer from /etc/xordesk.json (written by a previous run) - used by Xor Desk -
+#                            or, when DATUM_ADDRESS is set, from the environment (cloud-init / unattended first install):
+#                              DATUM_ADDRESS      payout address (required)
+#                              DATUM_TAG          block tag, letters/numbers/space . _ - (required)
+#                              DATUM_POOL         host:port of the DATUM pool (default datum.xorpool.com:28915)
+#                              DATUM_POOL_PUBKEY  the pool's 128-hex key (default: Bitcoin Xor's)
+#                              DATUM_POOL_URL     the pool's web address (optional, other pools only)
+#                              DATUM_SNAPSHOT     1 (default) fetch the chain snapshot, 0 sync from scratch
+#                              DATUM_XORDESK      1 install Xor Desk (local-only), 0 (default) skip it
 #         --snapshot         with --noninteractive: fetch the chain snapshot if the node is behind it
 NONINT=0; WANT_SNAP=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.6.0"
+SETUP_VERSION="v1.8.0"
 KNOTS_VER="29.4.2.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -181,8 +189,26 @@ PY
 }
 
 have python3 || { say "installing python3 (used to check the address)..."; apt-get -qq update && apt-get -qq -y install python3 >/dev/null; }
-if [ "$NONINT" -eq 1 ]; then
-  [ -f /etc/xordesk.json ] || die "--noninteractive needs /etc/xordesk.json from a previous run"
+ENV_ANSWERS=0; [ "$NONINT" -eq 1 ] && [ -n "${DATUM_ADDRESS:-}" ] && ENV_ANSWERS=1
+if [ "$ENV_ANSWERS" -eq 1 ]; then
+  # Answers from the environment: an unattended first install (cloud-init). Every value is checked the way the
+  # questions check it, and a bad one stops the run before anything is installed.
+  ADDR="${DATUM_ADDRESS//[[:space:]]/}"
+  validate_address "$ADDR" || die "DATUM_ADDRESS is not a valid address on this chain: $ADDR"
+  NAME="$(printf '%s' "${DATUM_TAG:-}" | tr -d '\r\n\t' | sed 's/^ *//; s/ *$//')"
+  { [ -n "$NAME" ] && [ "${#NAME}" -le 60 ] && printf '%s' "$NAME" | LC_ALL=C grep -qE '^[A-Za-z0-9 ._-]+$'; } || die "DATUM_TAG must be 1-60 characters of letters, numbers, spaces . _ - (got '${DATUM_TAG:-}')"
+  POOL="${DATUM_POOL:-$XOR_HOST:$XOR_PORT}"; POOL="${POOL//[[:space:]]/}"; POOL="${POOL#*://}"
+  case "$POOL" in *:*) POOL_HOST="${POOL%%:*}"; POOL_PORT="${POOL##*:}";; *) POOL_HOST="$POOL"; POOL_PORT="$XOR_PORT";; esac
+  printf '%s' "$POOL_HOST" | LC_ALL=C grep -qE '^[A-Za-z0-9.-]+$' && printf '%s' "$POOL_PORT" | grep -qE '^[0-9]{1,5}$' || die "DATUM_POOL must be host:port (got '$POOL')"
+  for i in 1 2 3 4 5 6; do getent hosts "$POOL_HOST" >/dev/null 2>&1 && break; sleep 10; done   # a fresh VM may get DNS a little late
+  getent hosts "$POOL_HOST" >/dev/null 2>&1 || die "cannot resolve the pool host '$POOL_HOST'"
+  POOL_PUBKEY="$(printf '%s' "${DATUM_POOL_PUBKEY:-$XOR_PUBKEY}" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+  valid_pubkey "$POOL_PUBKEY" || die "DATUM_POOL_PUBKEY must be 128 hex characters"
+  if [ "$POOL_PUBKEY" = "$XOR_PUBKEY" ]; then POOL_URL="$XOR_URL"; else POOL_URL="${DATUM_POOL_URL:-}"; fi
+  WANT_SNAP="${DATUM_SNAPSHOT:-1}"; case "$WANT_SNAP" in 1|0) ;; *) die "DATUM_SNAPSHOT must be 1 or 0";; esac
+  say ""; say "${bold}Unattended install${off} with answers from the environment: $ADDR / $NAME / $POOL_HOST:$POOL_PORT"
+elif [ "$NONINT" -eq 1 ]; then
+  [ -f /etc/xordesk.json ] || die "--noninteractive needs /etc/xordesk.json from a previous run, or DATUM_ADDRESS and DATUM_TAG in the environment"
   eval "$(python3 -c 'import json; d=json.load(open("/etc/xordesk.json")); import shlex
 print("ADDR=%s NAME=%s POOL=%s DESK_LISTEN=%s" % (shlex.quote(d.get("address","")), shlex.quote(d.get("name","")), shlex.quote(d.get("pool","")), shlex.quote(d.get("listen","127.0.0.1"))))')"
   validate_address "$ADDR" || die "saved payout address is not valid: $ADDR"
@@ -282,7 +308,8 @@ say ""
 say "5) Xor Desk (beta): a small web dashboard that runs on this machine - node sync, gateway, rigs, settings, one-click"
 say "   update/snapshot/restart, logs. It binds to this machine only and sends nothing anywhere."
 if [ "$OLD_DESK" -eq 1 ]; then say "   (already installed - it will be updated)"; fi
-if [ "$NONINT" -eq 1 ]; then DESK=1; ok "Xor Desk: keep ($( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo LAN || echo "this machine only" ))"
+if [ "$ENV_ANSWERS" -eq 1 ]; then DESK="${DATUM_XORDESK:-0}"; case "$DESK" in 1|0) ;; *) die "DATUM_XORDESK must be 1 or 0";; esac; [ "$DESK" -eq 1 ] && ok "Xor Desk: yes (this machine only)" || say "   (skipped; DATUM_XORDESK=1 installs it)"
+elif [ "$NONINT" -eq 1 ]; then DESK=1; ok "Xor Desk: keep ($( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo LAN || echo "this machine only" ))"
 elif confirm_default_yes "   Install Xor Desk?"; then
   DESK=1
   # a private (RFC1918) address means this box is on a LAN behind NAT: offer LAN access; a public IP stays localhost-only

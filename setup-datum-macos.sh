@@ -24,7 +24,7 @@
 # =====================================================================================
 set -euo pipefail
 
-SETUP_VERSION="v1.6.0"
+SETUP_VERSION="v1.8.0"
 KNOTS_VER="29.4.2.knots20260508"
 RATUM_VER="0.1.28"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the

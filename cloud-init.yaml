@@ -1,0 +1,81 @@
+#cloud-config
+# Bitcoin Xor - your own DATUM gateway in the cloud, one paste, no terminal.
+#
+#   1. Edit the three values under "write_files" below: your payout address, your block tag, the pool endpoint.
+#   2. Create a server: Ubuntu 24.04 (or newer), 2 vCPU / 4 GB RAM / 80 GB disk, and paste this WHOLE file into the
+#      provider's "User data" (cloud-init) box before you click Create. DigitalOcean: Advanced Options > User data.
+#      Vultr, Linode, Hetzner and most others have the same box.
+#   3. About 15 minutes after the server boots it is mining-ready: the node starts at the chain tip from a snapshot,
+#      the gateway is connected to the pool. Check it at https://xorpool.com/datum/miner/<your address>, or ssh in
+#      (the result is printed at login) and run:  datum-status
+#   4. Point your rigs at  stratum+tcp://<server IP>:23334   worker: anything.rig1   password: x
+#      Keep our pooled endpoint as pool 2 in the rigs (hk.datum.xorpool.com:23335, same worker and password) so a
+#      server reboot never idles them.
+#
+# What this does: firewall (22 + 23334 only), 2 GB swap, unattended security updates, then the same open-source
+# installer as the guide (github.com/bitcoinxor/datum-in-a-box) with your answers: Bitcoin Knots (BLAKE2b) pruned
+# node + ratum-gateway as services, chain snapshot, checksums verified. Nothing but your public address and tag is in
+# this file; the server sends nothing anywhere except to the pool. Log: /var/log/datum-cloud-setup.log
+#
+# Re-running later (update, change pool or address): ssh in and run the installer from the guide; it keeps your data.
+
+package_update: true
+packages: [ufw, curl, ca-certificates, unattended-upgrades]
+
+write_files:
+  - path: /etc/datum-cloud.env
+    permissions: "0600"
+    content: |
+      DATUM_ADDRESS="bc1q...PUT-YOUR-PAYOUT-ADDRESS-HERE"
+      DATUM_TAG="My Farm"
+      DATUM_POOL="datum.xorpool.com:28915"
+      # Address: a wallet you hold the keys to, never an exchange deposit address. bc1q..., bc1p..., 1... or 3...
+      # Tag: letters, numbers, spaces . _ - up to 60 characters; it is written into every block you help find.
+      # Pool: datum.xorpool.com:28915 (US), hk.datum.xorpool.com:28915 (Asia), eu.datum.xorpool.com:28915 (Europe).
+      # Another DATUM pool: set DATUM_POOL to its host:port and add DATUM_POOL_PUBKEY="<its 128-hex key>".
+  - path: /root/datum-cloud-setup.sh
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      # Runs once at first boot (from cloud-init runcmd). Everything it prints goes to the log.
+      set -u
+      LOG=/var/log/datum-cloud-setup.log; exec >>"$LOG" 2>&1
+      V=v1.8.0
+      echo "== DATUM cloud setup $(date -u +%FT%TZ)"
+      finish() {   # $1 = OK|FAILED, $2 = one line of detail; shown at every ssh login and kept in /root
+        IP=$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+        {
+          echo "=============================================================================="
+          echo " DATUM gateway setup: $1   ($(date -u +%FT%TZ))"
+          echo " $2"
+          if [ "$1" = OK ]; then
+            echo " Rigs:    stratum+tcp://$IP:23334   worker: anything.rig1   password: x"
+            echo " Status:  datum-status        Stats: https://xorpool.com/datum/miner/$DATUM_ADDRESS"
+          fi
+          echo " Log:     $LOG"
+          echo "=============================================================================="
+        } | tee /root/DATUM-SETUP-RESULT.txt > /etc/motd
+        echo "== finished: $1"
+      }
+      # Firewall: ssh and the gateway port, nothing else inbound. Swap and auto-updates for a small box.
+      ufw allow 22/tcp && ufw allow 23334/tcp && ufw --force enable
+      if ! swapon --show | grep -q /swapfile; then
+        fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+      echo 'vm.swappiness=10' > /etc/sysctl.d/60-swappiness.conf; sysctl -q --system
+      printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+      set -a; . /etc/datum-cloud.env; set +a
+      case "${DATUM_ADDRESS:-}" in ""|*PUT-YOUR*) finish FAILED "DATUM_ADDRESS was not filled in: edit the write_files section and create the server again"; exit 1;; esac
+      # The installer, from the release tag; our mirror when GitHub is unreachable.
+      curl -fsSL --max-time 120 -o /root/setup-datum.sh "https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/$V/setup-datum.sh" \
+        || curl -fsSL --max-time 120 -o /root/setup-datum.sh "https://snapshot.xorpool.com/mirror/setup-datum.sh" \
+        || { finish FAILED "could not download the installer (no route to GitHub or the mirror)"; exit 1; }
+      if bash /root/setup-datum.sh --noninteractive --snapshot; then
+        finish OK "node and gateway installed; the node is at the chain tip and the gateway is connected to $DATUM_POOL"
+      else
+        finish FAILED "the installer stopped; the reason is at the end of the log (bad address or tag, or a download problem)"
+        exit 1
+      fi
+
+runcmd:
+  - [bash, /root/datum-cloud-setup.sh]

@@ -36,6 +36,20 @@ sudo bash setup-datum.sh
 Prefer to see exactly what happens, or on a different distro? Keep reading — the manual steps are
 the same thing.
 
+## Cloud, one paste — no terminal at all
+
+[`cloud-init.yaml`](cloud-init.yaml) builds the whole gateway on a freshly created cloud server. Edit the three
+values at the top of its `write_files` section (payout address, block tag, pool endpoint), then create an Ubuntu
+24.04 server (2 vCPU / 4 GB / 80 GB) and paste the whole file into the provider's **User data** box before clicking
+Create (DigitalOcean: Advanced Options; Vultr, Linode, Hetzner and most others have the same box). About 15 minutes
+after boot the node is at the tip from the snapshot and the gateway is connected; the result is shown at every ssh
+login and at `xorpool.com/datum/miner/<your address>`. Point your rigs at `stratum+tcp://<server IP>:23334`.
+The guide at [xorpool.com/datum/setup](https://xorpool.com/datum/setup) (Cloud tab) fills the file in for you.
+
+Under the hood it runs this repo's `setup-datum.sh --noninteractive` with the answers in the environment
+(`DATUM_ADDRESS`, `DATUM_TAG`, `DATUM_POOL`, optional `DATUM_POOL_PUBKEY` / `DATUM_POOL_URL` for another pool,
+`DATUM_SNAPSHOT`, `DATUM_XORDESK`), which also works for any other unattended install.
+
 ## Windows — the same setup on a PC
 
 [`setup-datum.ps1`](setup-datum.ps1) is the Windows version of the installer: Windows 10/11 64-bit,
@@ -47,7 +61,7 @@ if you want it (on Windows 10, whose built-in `tar` cannot read zstd, the instal
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.7.5/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.8.0/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
