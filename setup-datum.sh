@@ -96,7 +96,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 RURL="https://github.com/bitcoinxor/xor-ratum/releases/download/v$RATUM_VER"   # our build of iohzrd/ratum: upstream plus the mining.extranonce.subscribe reply pool proxies need
 install_gateway() {
   local RTAR="ratum-gateway-$RATUM_VER-$RATUM_ARCH.tar.gz" BIN
-  if /usr/local/bin/ratum-gateway --version 2>/dev/null | grep -q " $RATUM_VER "; then ok "ratum-gateway $RATUM_VER already installed"; return; fi
+  if /usr/local/bin/ratum-gateway --version 2>/dev/null | grep -q " $RATUM_VER "; then ok "ratum-gateway $RATUM_VER already installed"; return 1; fi
   say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
   curl -fsSLo "$RTAR" "$RURL/$RTAR" || die "download failed: $RURL/$RTAR"
   curl -fsSLo "$RTAR.sha256" "$RURL/$RTAR.sha256" || die "download failed: $RTAR.sha256"
@@ -148,7 +148,8 @@ if [ "$UPDATE_GW" -eq 1 ]; then
   [ -f "$GW_CONF" ] && [ -f /etc/systemd/system/ratum-gateway.service ] || die "no gateway from this script found here (no $GW_CONF); run the script without --update-gateway to install"
   have python3 || { apt-get -qq update && apt-get -qq -y install python3 >/dev/null; }
   say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $(/usr/local/bin/ratum-gateway --version 2>&1 | head -1))"
-  TMP=$(mktemp -d); cd "$TMP"; install_gateway; cd /; rm -rf "$TMP"
+  TMP=$(mktemp -d); cd "$TMP"; CHANGED=1; install_gateway || CHANGED=0; cd /; rm -rf "$TMP"
+  if [ "$CHANGED" -eq 0 ]; then say "  nothing to do: the gateway is already on this release, left running"; trap - EXIT; exit 0; fi
   systemctl restart ratum-gateway; sleep 2
   systemctl is-active --quiet ratum-gateway || die "the gateway did not start - see: journalctl -u ratum-gateway -n 50"
   read -r GH GP <<<"$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["datum"]; print(d.get("pool_host",""), d.get("pool_port",""))' "$GW_CONF" 2>/dev/null || echo "? ?")"
@@ -423,7 +424,7 @@ else
   ok "$(/usr/local/bin/bitcoind --version | head -1)"
 fi
 
-install_gateway   # defined with the helpers: the release named at the top, checksum verified, into /usr/local/bin
+install_gateway || true   # defined with the helpers: the release named at the top, checksum verified, into /usr/local/bin
 cd /
 
 # node config - the chain data (if any) is untouched. This file is rewritten on every run; the owner's own policy lives in

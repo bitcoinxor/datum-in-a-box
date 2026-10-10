@@ -162,7 +162,7 @@ function Install-Gateway {   # ratum-gateway $RATUM_VER (checksum pinned) into $
     Ok "Microsoft Visual C++ runtime installed"
   }
   $curRatum = ""; if (Test-Path "$BIN\ratum-gateway.exe") { try { $curRatum = (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {} }
-  if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already installed" }
+  if ($curRatum -match " $RATUM_VER ") { Ok "ratum-gateway $RATUM_VER already installed"; return $false }
   else {
     Say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
     $rzip = "ratum-gateway-$RATUM_VER-x86_64-windows.zip"; $rurl = "https://github.com/bitcoinxor/xor-ratum/releases/download/v$RATUM_VER"
@@ -176,6 +176,7 @@ function Install-Gateway {   # ratum-gateway $RATUM_VER (checksum pinned) into $
     if ($v -notmatch [regex]::Escape($RATUM_VER)) { Die "ratum-gateway.exe does not run on this PC (exit code $LASTEXITCODE, output: '$v'). An antivirus may be blocking it; look for a quarantine entry for C:\XorDatum\bin\ratum-gateway.exe, restore it and add an exclusion, then run this script again." }
     Ok $v
   }
+  return $true
 }
 
 function Check-PoolLink($poolHost, $poolPort, $logMark, $rounds) {   # waits up to $rounds x 2 s for the gateway's pool link, then says what it saw
@@ -211,7 +212,9 @@ if ($UpdateGateway) {
   $cur = ""; try { $cur = "" + (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {}
   Say ""; Say "Updating the gateway to ratum-gateway $RATUM_VER (current: $cur)"
   New-Item -ItemType Directory -Force -Path $TMP | Out-Null
-  StopGateway; Install-Gateway; Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+  $changed = Install-Gateway; Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+  if (-not $changed) { Say "  nothing to do: the gateway is already on this release, left running"; exit 0 }
+  StopGateway
   $logMark = if (Test-Path "$LOGS\gateway.log") { (Get-Item "$LOGS\gateway.log").Length } else { 0 }
   Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 3
   $g = $null; try { $g = Get-Content $GW_CONF -Raw | ConvertFrom-Json } catch {}
@@ -409,7 +412,7 @@ else {
   Copy-Item $src.FullName "$BIN\bitcoind.exe" -Force; Copy-Item (Join-Path $src.DirectoryName "bitcoin-cli.exe") "$BIN\bitcoin-cli.exe" -Force
   Ok ((& "$BIN\bitcoind.exe" --version | Select-Object -First 1))
 }
-Install-Gateway
+[void](Install-Gateway)
 
 # node config (chain data untouched). This file is rewritten on every run; the owner's own relay / block-building policy
 # lives in policy.conf, included at the end and never touched again once it exists. The main file beats an included

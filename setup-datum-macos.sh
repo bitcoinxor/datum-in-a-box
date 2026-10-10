@@ -96,7 +96,7 @@ svc_stop() {  # unload the service; launchd sends SIGTERM and waits ExitTimeOut 
 RURL="https://github.com/bitcoinxor/xor-ratum/releases/download/v$RATUM_VER"   # our build of iohzrd/ratum: upstream plus the mining.extranonce.subscribe reply pool proxies need
 install_gateway() {   # ratum-gateway $RATUM_VER into $BIN, checksum verified; runs in the caller's temp dir
   local RTAR="ratum-gateway-$RATUM_VER-$RATUM_ARCH.tar.gz" RB
-  if "$BIN/ratum-gateway" --version 2>/dev/null | grep -q " $RATUM_VER "; then ok "ratum-gateway $RATUM_VER already installed"; return; fi
+  if "$BIN/ratum-gateway" --version 2>/dev/null | grep -q " $RATUM_VER "; then ok "ratum-gateway $RATUM_VER already installed"; return 1; fi
   say "downloading ratum-gateway $RATUM_VER (~3 MB)..."
   curl -fsSLo "$RTAR" "$RURL/$RTAR" || die "download failed: $RURL/$RTAR"
   curl -fsSLo "$RTAR.sha256" "$RURL/$RTAR.sha256" || die "download failed: $RTAR.sha256"
@@ -162,7 +162,8 @@ if [ "$UPDATE_GW" -eq 1 ]; then
   # Gateway update only: the binary this release names, a restart of its daemon, the handshake check. Nothing else is read or written.
   [ -f "$GW_CONF" ] && [ -f "$GW_PLIST" ] || die "no gateway from this script found here (no $GW_CONF); run the script without --update-gateway to install"
   say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $("$BIN/ratum-gateway" --version 2>&1 | head -1))"
-  TMP=$(mktemp -d); cd "$TMP"; install_gateway; cd /; rm -rf "$TMP"
+  TMP=$(mktemp -d); cd "$TMP"; CHANGED=1; install_gateway || CHANGED=0; cd /; rm -rf "$TMP"
+  if [ "$CHANGED" -eq 0 ]; then say "  nothing to do: the gateway is already on this release, left running"; trap - EXIT; exit 0; fi
   LOGMARK=$(wc -c < "$LOGS/gateway.log" 2>/dev/null | tr -d ' ' || echo 0)
   svc_stop "$GW_LABEL"; pkill -x ratum-gateway 2>/dev/null || true; svc_start "$GW_LABEL" "$GW_PLIST"; sleep 3
   GH=$(perl -MJSON::PP -e 'local $/; my $d = decode_json(<STDIN>); print $d->{datum}{pool_host}' < "$GW_CONF" 2>/dev/null || echo "?")
@@ -370,7 +371,7 @@ else
   ok "$("$BIN/bitcoind" --version | head -1)"
 fi
 
-install_gateway   # defined with the helpers: the release named at the top, checksum verified, into $BIN
+install_gateway || true   # defined with the helpers: the release named at the top, checksum verified, into $BIN
 cd /; rm -rf "$TMP"
 
 # node config - the chain data (if any) is untouched. This file is rewritten on every run; the owner's own relay /
