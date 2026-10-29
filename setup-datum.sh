@@ -4,7 +4,7 @@
 #
 #  Installs, on this machine, everything needed to mine on the Bitcoin BLAKE2b chain with
 #  YOUR OWN block templates:
-#     * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
+#     * Bitcoin Knots (BLAKE2b fork) v29.4.3 - pruned full node, RPC local-only
 #     * ratum-gateway 0.1.66-xor.1     - DATUM gateway your ASICs connect to on :23334
 #     * Xor Desk (optional)             - a local web dashboard for this machine, sends nothing anywhere
 #  and points the gateway at a DATUM pool for the payout split: Bitcoin Xor (xorpool.com, 1% fee) by default,
@@ -27,14 +27,15 @@ set -euo pipefail
 #                              DATUM_SNAPSHOT     1 (default) fetch the chain snapshot, 0 sync from scratch
 #                              DATUM_XORDESK      1 install Xor Desk (local-only), 0 (default) skip it
 #         --snapshot         with --noninteractive: fetch the chain snapshot if the node is behind it
-#         --update-gateway   only bring ratum-gateway to this script's release and restart it: no questions, the node,
-#                            configs and chain data untouched (for an install made by this script)
+#         --update           bring Bitcoin Knots and ratum-gateway to this script's releases and restart what changed: no
+#                            questions, configs and chain data untouched (for an install made by this script)
+#         --update-gateway   the same for ratum-gateway only
 NONINT=0; WANT_SNAP=0
-UPDATE_GW=0
-for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; --update-gateway) UPDATE_GW=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
+UPDATE_GW=0; UPDATE_ALL=0
+for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; --update-gateway) UPDATE_GW=1;; --update) UPDATE_ALL=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.8.1"
-KNOTS_VER="29.4.2.knots20260508"
+SETUP_VERSION="v1.9.0"
+KNOTS_VER="${DATUM_KNOTS_VER:-29.4.3.knots20260508}"   # the node release this script installs; DATUM_KNOTS_VER=<version> overrides it (see README: at your own risk)
 RATUM_VER="0.1.66-xor.1"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
@@ -108,6 +109,33 @@ install_gateway() {
   ok "$(/usr/local/bin/ratum-gateway --version 2>&1 | head -1)"
 }
 
+# Fetch Bitcoin Knots $KNOTS_VER (checksum verified against the release's signed SHA256SUMS list) into /usr/local/bin,
+# unless it is already that version. Runs in the current directory (a temp dir). Returns 1 when nothing was installed.
+KNOTS_NEW=0
+install_knots() {
+  local KURL="https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER" KTAR="bitcoin-$KNOTS_VER-$KNOTS_ARCH.tar.gz"
+  if [ "$(/usr/local/bin/bitcoind --version 2>/dev/null | head -1 | grep -o 'v[0-9.]*knots[0-9]*' || true)" = "v$KNOTS_VER" ]; then ok "Bitcoin Knots v$KNOTS_VER already installed"; return 1; fi
+  say "downloading Bitcoin Knots v$KNOTS_VER (~55 MB)..."
+  curl -fsSLo "$KTAR" "$KURL/$KTAR" || die "download failed: $KURL/$KTAR"
+  curl -fsSLo SHA256SUMS "$KURL/SHA256SUMS" || die "download failed: SHA256SUMS"
+  sha256sum --ignore-missing --quiet -c SHA256SUMS || die "checksum MISMATCH on $KTAR - not installing it"
+  tar xzf "$KTAR"
+  install -m 755 "bitcoin-$KNOTS_VER/bin/bitcoind" "bitcoin-$KNOTS_VER/bin/bitcoin-cli" /usr/local/bin/
+  ok "$(/usr/local/bin/bitcoind --version | head -1)"
+  KNOTS_NEW=1
+}
+
+# Restart the node onto a newly installed binary and wait for it to answer (up to 5 min; a late upgrade across a
+# soft-fork height rechecks blocks first). The gateway keeps the ASICs on their current work meanwhile.
+restart_node() {
+  local i RUNNING_VER
+  say "restarting the node onto Bitcoin Knots v$KNOTS_VER..."
+  systemctl restart knotsd
+  for i in $(seq 1 150); do sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getblockcount >/dev/null 2>&1 && break; sleep 2; done
+  RUNNING_VER=$(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getnetworkinfo 2>/dev/null | grep -o 'Knots:[0-9a-z]*' || true)
+  if [ -n "$RUNNING_VER" ]; then ok "node restarted on v$KNOTS_VER"; else warn "the node has not answered yet after its update - check in a few minutes with: datum-status"; fi
+}
+
 # Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
 # port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
 check_pool_link() {  # check_pool_link host port
@@ -143,15 +171,29 @@ say ""
 say "${bold}Bitcoin Xor - DATUM setup${off}   ${dim}Knots v$KNOTS_VER + ratum-gateway $RATUM_VER on ${PRETTY_NAME:-$ID} ($ARCH)${off}"
 say ""
 
-if [ "$UPDATE_GW" -eq 1 ]; then
-  # Gateway update only: the binary this release names, a restart, the handshake check. Nothing else is read or written.
-  [ -f "$GW_CONF" ] && [ -f /etc/systemd/system/ratum-gateway.service ] || die "no gateway from this script found here (no $GW_CONF); run the script without --update-gateway to install"
+if [ "$UPDATE_GW" -eq 1 ] || [ "$UPDATE_ALL" -eq 1 ]; then
+  # Update only: the binaries this release names (node too with --update), a restart of what changed, the handshake
+  # check. No questions; configs and chain data are not read or written.
+  [ -f "$GW_CONF" ] && [ -f /etc/systemd/system/ratum-gateway.service ] || die "no gateway from this script found here (no $GW_CONF); run the script without the update flag to install"
   have python3 || { apt-get -qq update && apt-get -qq -y install python3 >/dev/null; }
-  say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $(/usr/local/bin/ratum-gateway --version 2>&1 | head -1))"
-  TMP=$(mktemp -d); cd "$TMP"; CHANGED=1; install_gateway || CHANGED=0; cd /; rm -rf "$TMP"
-  if [ "$CHANGED" -eq 0 ]; then say "  nothing to do: the gateway is already on this release, left running"; trap - EXIT; exit 0; fi
-  systemctl restart ratum-gateway; sleep 2
-  systemctl is-active --quiet ratum-gateway || die "the gateway did not start - see: journalctl -u ratum-gateway -n 50"
+  if [ "$UPDATE_ALL" -eq 1 ]; then
+    [ -f "$NODE_CONF" ] && [ -f /etc/systemd/system/knotsd.service ] || die "no node from this script found here (no $NODE_CONF); use --update-gateway for a gateway-only install"
+    say "${bold}Updating node and gateway${off}: Bitcoin Knots v$KNOTS_VER (current: $(/usr/local/bin/bitcoind --version 2>/dev/null | head -1)), ratum-gateway $RATUM_VER (current: $(/usr/local/bin/ratum-gateway --version 2>&1 | head -1))"
+  else
+    say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $(/usr/local/bin/ratum-gateway --version 2>&1 | head -1))"
+  fi
+  TMP=$(mktemp -d); cd "$TMP"
+  if [ "$UPDATE_ALL" -eq 1 ]; then install_knots || true; fi
+  CHANGED=1; install_gateway || CHANGED=0
+  cd /; rm -rf "$TMP"
+  if [ "$KNOTS_NEW" -eq 1 ]; then restart_node; fi
+  if [ "$CHANGED" -eq 0 ]; then
+    say "  gateway: already on this release, left running"
+    if [ "$KNOTS_NEW" -eq 0 ]; then say "  nothing to do: everything is already on this release"; trap - EXIT; exit 0; fi
+  else
+    systemctl restart ratum-gateway; sleep 2
+    systemctl is-active --quiet ratum-gateway || die "the gateway did not start - see: journalctl -u ratum-gateway -n 50"
+  fi
   read -r GH GP <<<"$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["datum"]; print(d.get("pool_host",""), d.get("pool_port",""))' "$GW_CONF" 2>/dev/null || echo "? ?")"
   check_pool_link "$GH" "$GP"
   say ""; [ -x /usr/local/bin/datum-status ] && /usr/local/bin/datum-status || true
@@ -409,20 +451,7 @@ ok "service user '$SVC_USER'"
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' RETURN
 cd "$TMP"
-KURL="https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
-KTAR="bitcoin-$KNOTS_VER-$KNOTS_ARCH.tar.gz"
-if [ "$(/usr/local/bin/bitcoind --version 2>/dev/null | head -1 | grep -o 'v[0-9.]*knots[0-9]*' || true)" = "v$KNOTS_VER" ]; then
-  ok "Bitcoin Knots v$KNOTS_VER already installed"
-else
-  KNOTS_NEW=1
-  say "downloading Bitcoin Knots v$KNOTS_VER (~55 MB)..."
-  curl -fsSLo "$KTAR" "$KURL/$KTAR" || die "download failed: $KURL/$KTAR"
-  curl -fsSLo SHA256SUMS "$KURL/SHA256SUMS" || die "download failed: SHA256SUMS"
-  sha256sum --ignore-missing --quiet -c SHA256SUMS || die "checksum MISMATCH on $KTAR - not installing it"
-  tar xzf "$KTAR"
-  install -m 755 "bitcoin-$KNOTS_VER/bin/bitcoind" "bitcoin-$KNOTS_VER/bin/bitcoin-cli" /usr/local/bin/
-  ok "$(/usr/local/bin/bitcoind --version | head -1)"
-fi
+install_knots || true   # defined with the helpers; sets KNOTS_NEW=1 when it installed a new version
 
 install_gateway || true   # defined with the helpers: the release named at the top, checksum verified, into /usr/local/bin
 cd /
@@ -601,13 +630,7 @@ systemctl enable --now knotsd >/dev/null 2>&1
 # "enable --now" does nothing to a node that is already running, so after a node update the old version would
 # keep running from memory. Restart it onto the new binary and wait for it to answer; the gateway keeps the
 # ASICs on their current work meanwhile.
-if [ "$UPDATE" -eq 1 ] && [ "$KNOTS_NEW" -eq 1 ]; then
-  say "restarting the node onto Bitcoin Knots v$KNOTS_VER..."
-  systemctl restart knotsd
-  for i in $(seq 1 150); do sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getblockcount >/dev/null 2>&1 && break; sleep 2; done
-  RUNNING_VER=$(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getnetworkinfo 2>/dev/null | grep -o 'Knots:[0-9a-z]*' || true)
-  if [ -n "$RUNNING_VER" ]; then ok "node restarted on v$KNOTS_VER"; else warn "the node has not answered yet after its update - check in a few minutes with: datum-status"; fi
-fi
+if [ "$UPDATE" -eq 1 ] && [ "$KNOTS_NEW" -eq 1 ]; then restart_node; fi
 systemctl enable --now ratum-gateway >/dev/null 2>&1
 # "enable --now" does nothing to a gateway that is already running, so on a re-run the config written above
 # (address, name, pool, key) would never be loaded. Restarting it costs the ASICs a reconnect of a second or two.

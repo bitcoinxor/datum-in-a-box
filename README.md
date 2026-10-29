@@ -36,18 +36,34 @@ sudo bash setup-datum.sh
 Prefer to see exactly what happens, or on a different distro? Keep reading — the manual steps are
 the same thing.
 
-## Updating only the gateway
+## Updating an existing install
 
-When a new ratum-gateway release is pinned here, bring an existing install to it without re-answering anything:
+One line brings node and gateway to the versions this release pins, with no questions; configs and chain data are not
+touched and only what changed is restarted:
 
 ```bash
-sudo bash setup-datum.sh --update-gateway        # Linux and macOS
-powershell -ExecutionPolicy Bypass -File setup-datum.ps1 -UpdateGateway   # Windows, as administrator
+curl -fsSL https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.0/setup-datum.sh | sudo bash -s -- --update
 ```
 
-It downloads the release (checksum verified), restarts the gateway, checks the pool handshake and prints `datum-status`.
-Node, configs and chain data are not touched. Running the installer without the flag updates everything, with every
-previous answer offered as the default.
+Windows, in an administrator PowerShell:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.0/setup-datum.ps1 -OutFile $env:TEMP\setup-datum.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-datum.ps1 -Update
+```
+
+`--update-gateway` / `-UpdateGateway` do the same for the gateway alone. If GitHub is unreachable, the same files are at
+`https://snapshot.xorpool.com/mirror/`. On a Windows install that uses your own Bitcoin Knots wallet as the node, the
+update covers the gateway and tells you to update the wallet program yourself.
+
+**Why update now (October 2026).** Bitcoin Knots v29.4.3 carries a flag-day rule at block 979919: rewards mined from
+that block are locked for about 180 days. A node left on 29.4.2 keeps following the chain for a while, but from block
+986399 (about November 9) it can build blocks the network rejects, so a gateway on it would mine for nothing. Updating
+before block 979919 is painless; a pruned node that updates later may have to re-sync from scratch.
+
+**Another Knots version on purpose.** `DATUM_KNOTS_VER=<version>` in the environment makes the installer fetch that
+release instead (for example `DATUM_KNOTS_VER=29.4.2.knots20260508`). This is for people who knowingly want a different
+consensus version. Understand what it means: after block 986399 a 29.4.2 node's blocks can be rejected by the rest of
+the network, and there is no second chain to collect on unless a majority of hashrate stays on the old rules.
 
 ## Cloud, one paste — no terminal at all
 
@@ -74,7 +90,7 @@ if you want it (on Windows 10, whose built-in `tar` cannot read zstd, the instal
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.8.1/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.0/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 

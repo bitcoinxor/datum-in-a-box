@@ -40,7 +40,7 @@ write_files:
       # Runs once at first boot (from cloud-init runcmd). Everything it prints goes to the log.
       set -u
       LOG=/var/log/datum-cloud-setup.log; exec >>"$LOG" 2>&1
-      V=v1.8.1
+      V=v1.9.0
       echo "== DATUM cloud setup $(date -u +%FT%TZ)"
       finish() {   # $1 = OK|FAILED, $2 = one line of detail; shown at every ssh login and kept in /root
         IP=$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')

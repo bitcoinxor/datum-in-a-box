@@ -4,7 +4,7 @@
 #
 #  Installs, on this Mac, everything needed to mine on the Bitcoin BLAKE2b chain with
 #  YOUR OWN block templates:
-#     * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
+#     * Bitcoin Knots (BLAKE2b fork) v29.4.3 - pruned full node, RPC local-only
 #     * ratum-gateway 0.1.66-xor.1     - DATUM gateway your ASICs connect to on :23334
 #  and points the gateway at a DATUM pool for the payout split: Bitcoin Xor (xorpool.com, 1% fee) by default,
 #  or any other DATUM pool whose host, port and public key you enter.
@@ -23,13 +23,14 @@
 #  Mac: no Homebrew, no Xcode tools, no python needed (perl and shasum ship with macOS).
 # =====================================================================================
 set -euo pipefail
-# Flags:  --update-gateway   only bring ratum-gateway to this script's release and restart it: no questions, the node,
-#                            configs and chain data untouched (for an install made by this script)
-UPDATE_GW=0
-for a in "$@"; do case "$a" in --update-gateway) UPDATE_GW=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
+# Flags:  --update           bring Bitcoin Knots and ratum-gateway to this script's releases and restart what changed: no
+#                            questions, configs and chain data untouched (for an install made by this script)
+#         --update-gateway   the same for ratum-gateway only
+UPDATE_GW=0; UPDATE_ALL=0
+for a in "$@"; do case "$a" in --update-gateway) UPDATE_GW=1;; --update) UPDATE_ALL=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.8.1"
-KNOTS_VER="29.4.2.knots20260508"
+SETUP_VERSION="v1.9.0"
+KNOTS_VER="${DATUM_KNOTS_VER:-29.4.3.knots20260508}"   # the node release this script installs; DATUM_KNOTS_VER=<version> overrides it (see README: at your own risk)
 RATUM_VER="0.1.66-xor.1"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
@@ -108,6 +109,22 @@ install_gateway() {   # ratum-gateway $RATUM_VER into $BIN, checksum verified; r
   ok "$("$BIN/ratum-gateway" --version 2>&1 | head -1)"
 }
 
+KNOTS_NEW=0
+install_knots() {   # Bitcoin Knots $KNOTS_VER into $BIN, checksum from the release's signed list; runs in the caller's temp dir; returns 1 when already current
+  local KURL="https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER" KTAR="bitcoin-$KNOTS_VER-$KNOTS_ARCH.tar.gz" want
+  if [ "$("$BIN/bitcoind" --version 2>/dev/null | head -1 | grep -o 'v[0-9.]*knots[0-9]*' || true)" = "v$KNOTS_VER" ]; then ok "Bitcoin Knots v$KNOTS_VER already installed"; return 1; fi
+  say "downloading Bitcoin Knots v$KNOTS_VER (~40 MB)..."
+  curl -fsSLo "$KTAR" "$KURL/$KTAR" || die "download failed: $KURL/$KTAR"
+  curl -fsSLo SHA256SUMS "$KURL/SHA256SUMS" || die "download failed: SHA256SUMS"
+  want=$(grep " $KTAR\$" SHA256SUMS | cut -d' ' -f1); [ -n "$want" ] || die "$KTAR is not listed in SHA256SUMS"
+  [ "$(sha256 "$KTAR")" = "$want" ] || die "checksum MISMATCH on $KTAR - not installing it"
+  tar xzf "$KTAR"
+  install -m 755 "bitcoin-$KNOTS_VER/bin/bitcoind" "bitcoin-$KNOTS_VER/bin/bitcoin-cli" "$BIN/"
+  xattr -d com.apple.quarantine "$BIN/bitcoind" "$BIN/bitcoin-cli" 2>/dev/null || true
+  ok "$("$BIN/bitcoind" --version | head -1)"
+  KNOTS_NEW=1
+}
+
 check_pool_link() {  # check_pool_link host port  (reads LOGMARK: the gateway log size before the start)
   # Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
   # port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
@@ -158,12 +175,30 @@ have launchctl || die "launchctl is missing"
 say ""
 say "${bold}Bitcoin Xor - DATUM setup for macOS${off}   ${dim}Knots v$KNOTS_VER + ratum-gateway $RATUM_VER on macOS $OSVER ($ARCH)${off}"
 
-if [ "$UPDATE_GW" -eq 1 ]; then
-  # Gateway update only: the binary this release names, a restart of its daemon, the handshake check. Nothing else is read or written.
-  [ -f "$GW_CONF" ] && [ -f "$GW_PLIST" ] || die "no gateway from this script found here (no $GW_CONF); run the script without --update-gateway to install"
-  say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $("$BIN/ratum-gateway" --version 2>&1 | head -1))"
-  TMP=$(mktemp -d); cd "$TMP"; CHANGED=1; install_gateway || CHANGED=0; cd /; rm -rf "$TMP"
-  if [ "$CHANGED" -eq 0 ]; then say "  nothing to do: the gateway is already on this release, left running"; trap - EXIT; exit 0; fi
+if [ "$UPDATE_GW" -eq 1 ] || [ "$UPDATE_ALL" -eq 1 ]; then
+  # Update only: the binaries this release names (node too with --update), a restart of what changed, the handshake check.
+  [ -f "$GW_CONF" ] && [ -f "$GW_PLIST" ] || die "no gateway from this script found here (no $GW_CONF); run the script without the update flag to install"
+  if [ "$UPDATE_ALL" -eq 1 ]; then
+    [ -f "$NODE_CONF" ] && [ -f "$NODE_PLIST" ] || die "no node from this script found here (no $NODE_CONF); use --update-gateway for a gateway-only install"
+    say "${bold}Updating node and gateway${off}: Bitcoin Knots v$KNOTS_VER (current: $("$BIN/bitcoind" --version 2>/dev/null | head -1)), ratum-gateway $RATUM_VER (current: $("$BIN/ratum-gateway" --version 2>&1 | head -1))"
+  else
+    say "${bold}Updating the gateway${off} to ratum-gateway $RATUM_VER (current: $("$BIN/ratum-gateway" --version 2>&1 | head -1))"
+  fi
+  TMP=$(mktemp -d); cd "$TMP"
+  if [ "$UPDATE_ALL" -eq 1 ]; then install_knots || true; fi
+  CHANGED=1; install_gateway || CHANGED=0
+  cd /; rm -rf "$TMP"
+  if [ "$KNOTS_NEW" -eq 1 ]; then
+    say "restarting the node onto Bitcoin Knots v$KNOTS_VER..."
+    svc_stop "$NODE_LABEL"; pkill -x bitcoind 2>/dev/null || true; sleep 2; svc_start "$NODE_LABEL" "$NODE_PLIST"
+    for i in $(seq 1 150); do "$BIN/bitcoin-cli" -datadir="$NODE_DIR" getblockcount >/dev/null 2>&1 && break; sleep 2; done
+    if "$BIN/bitcoin-cli" -datadir="$NODE_DIR" getblockcount >/dev/null 2>&1; then ok "node restarted on v$KNOTS_VER"; else warn "the node has not answered yet after its update - check in a few minutes with: datum-status"; fi
+  fi
+  if [ "$CHANGED" -eq 0 ]; then
+    say "  gateway: already on this release, left running"
+    if [ "$KNOTS_NEW" -eq 0 ]; then say "  nothing to do: everything is already on this release"; trap - EXIT; exit 0; fi
+    say ""; [ -x "$ROOT/datum-status" ] && "$ROOT/datum-status" || true; trap - EXIT; exit 0
+  fi
   LOGMARK=$(wc -c < "$LOGS/gateway.log" 2>/dev/null | tr -d ' ' || echo 0)
   svc_stop "$GW_LABEL"; pkill -x ratum-gateway 2>/dev/null || true; svc_start "$GW_LABEL" "$GW_PLIST"; sleep 3
   GH=$(perl -MJSON::PP -e 'local $/; my $d = decode_json(<STDIN>); print $d->{datum}{pool_host}' < "$GW_CONF" 2>/dev/null || echo "?")
@@ -355,21 +390,7 @@ stop_all
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/xordatum.XXXXXX")
 cd "$TMP"
-KURL="https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
-KTAR="bitcoin-$KNOTS_VER-$KNOTS_ARCH.tar.gz"
-if [ "$("$BIN/bitcoind" --version 2>/dev/null | head -1 | grep -o 'v[0-9.]*knots[0-9]*' || true)" = "v$KNOTS_VER" ]; then
-  ok "Bitcoin Knots v$KNOTS_VER already installed"
-else
-  say "downloading Bitcoin Knots v$KNOTS_VER (~40 MB)..."
-  curl -fsSLo "$KTAR" "$KURL/$KTAR" || die "download failed: $KURL/$KTAR"
-  curl -fsSLo SHA256SUMS "$KURL/SHA256SUMS" || die "download failed: SHA256SUMS"
-  want=$(grep " $KTAR\$" SHA256SUMS | cut -d' ' -f1); [ -n "$want" ] || die "$KTAR is not listed in SHA256SUMS"
-  [ "$(sha256 "$KTAR")" = "$want" ] || die "checksum MISMATCH on $KTAR - not installing it"
-  tar xzf "$KTAR"
-  install -m 755 "bitcoin-$KNOTS_VER/bin/bitcoind" "bitcoin-$KNOTS_VER/bin/bitcoin-cli" "$BIN/"
-  xattr -d com.apple.quarantine "$BIN/bitcoind" "$BIN/bitcoin-cli" 2>/dev/null || true
-  ok "$("$BIN/bitcoind" --version | head -1)"
-fi
+install_knots || true   # defined with the helpers; sets KNOTS_NEW=1 when it installed a new version
 
 install_gateway || true   # defined with the helpers: the release named at the top, checksum verified, into $BIN
 cd /; rm -rf "$TMP"

@@ -3,7 +3,7 @@
   Bitcoin Xor - build your own blocks: one-command DATUM setup for Windows
   ---------------------------------------------------------------------------
   Installs, on this PC, everything needed to mine on the Bitcoin BLAKE2b chain with YOUR OWN block templates:
-     * Bitcoin Knots (BLAKE2b fork) v29.4.2 - pruned full node, RPC local-only
+     * Bitcoin Knots (BLAKE2b fork) v29.4.3 - pruned full node, RPC local-only
      * ratum-gateway 0.1.66-xor.1     - the DATUM gateway your ASICs connect to on port 23334
   and points the gateway at the Bitcoin Xor DATUM pool for the payout split (1% fee).
   Both run as scheduled tasks that start with Windows (no login needed). Nothing is sent anywhere.
@@ -14,20 +14,21 @@
   Usage:  right-click PowerShell -> Run as administrator, then:
           powershell -ExecutionPolicy Bypass -File setup-datum.ps1
           add  -ExistingNode "C:\path\to\Bitcoin"  to name the data folder of a node the script did not find by itself
-          add  -UpdateGateway  to only bring ratum-gateway to this script's release and restart it (no questions, node untouched)
+          add  -Update  to bring Bitcoin Knots and ratum-gateway to this script's releases and restart what changed (no questions)
+          add  -UpdateGateway  for ratum-gateway only
   Source: https://github.com/bitcoinxor/datum-in-a-box   Questions: https://t.me/bitcoinxor
 #>
-param([string]$ExistingNode = "", [switch]$UpdateGateway)
+param([string]$ExistingNode = "", [switch]$UpdateGateway, [switch]$Update)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.8.1"
-$KNOTS_VER  = "29.4.2.knots20260508"
+$SETUP_VERSION = "v1.9.0"
+$KNOTS_VER  = if ($env:DATUM_KNOTS_VER) { $env:DATUM_KNOTS_VER } else { "29.4.3.knots20260508" }   # DATUM_KNOTS_VER overrides the node release (see README: at your own risk)
 $RATUM_VER  = "0.1.66-xor.1"
 # The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
 # pinned here, so a download from anywhere (GitHub, or our mirror when GitHub is unreachable) is checked against the
 # authors' values, not against whatever sits next to the file. Update both when bumping a version.
-$KNOTS_SHA256 = "8fa3445a0f3ecc7d1f9e4f4778e44c786883437ac781902a38135be5ea0a892b"   # bitcoin-29.4.2.knots20260508-win64-pgpverifiable.zip
+$KNOTS_SHA256 = if ($env:DATUM_KNOTS_VER) { "" } else { "3035ee70d108f6ff7fa76b99df9e261181da34a471b30946cf5a1e5e504ec709" }   # bitcoin-29.4.3.knots20260508-win64-pgpverifiable.zip; an overridden version is checked against its release's SHA256SUMS instead
 $RATUM_SHA256 = "c5d2197439dcaf095a8f40b94d8bd2e24a3038888821dd2b7882109c0827a628"   # ratum-gateway-0.1.66-xor.1-x86_64-windows.zip
 $MIRROR = "https://snapshot.xorpool.com/mirror"   # same files, for networks where GitHub's release downloads fail (China)
 $VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"   # the gateway needs Microsoft's VC++ runtime (vcruntime140.dll); a bare Windows 10 lacks it
@@ -179,6 +180,27 @@ function Install-Gateway {   # ratum-gateway $RATUM_VER (checksum pinned) into $
   return $true
 }
 
+function Install-Knots {   # Bitcoin Knots $KNOTS_VER (checksum pinned, or from the release's SHA256SUMS for an overridden version) into $BIN; $true when it installed
+  $curKnots = ""; if (Test-Path "$BIN\bitcoind.exe") { try { $curKnots = (& "$BIN\bitcoind.exe" --version | Select-Object -First 1) } catch {} }
+  if ($curKnots -match [regex]::Escape("v$KNOTS_VER")) { Ok "Bitcoin Knots v$KNOTS_VER already installed"; return $false }
+  Say "downloading Bitcoin Knots v$KNOTS_VER (~50 MB)..."
+  $kzip = "bitcoin-$KNOTS_VER-win64-pgpverifiable.zip"; $kurl = "https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
+  $want = $KNOTS_SHA256
+  if (-not $want) {
+    Download "$kurl/SHA256SUMS" "$TMP\SHA256SUMS"
+    $m = (Select-String -Path "$TMP\SHA256SUMS" -Pattern ("^([0-9a-f]{64})\s+" + [regex]::Escape($kzip) + "$")).Matches
+    if (-not $m -or $m.Count -eq 0) { Die "$kzip is not listed in that release's SHA256SUMS" }
+    $want = $m[0].Groups[1].Value.ToLower()
+  }
+  Download "$kurl/$kzip" "$TMP\$kzip" $want
+  if ((Get-Sha256 "$TMP\$kzip") -ne $want) { Remove-Item "$TMP\$kzip" -Force; Die "checksum MISMATCH on $kzip - not installing it" }
+  Expand-Archive -Path "$TMP\$kzip" -DestinationPath "$TMP\knots" -Force
+  $src = Get-ChildItem "$TMP\knots" -Recurse -Filter bitcoind.exe | Select-Object -First 1
+  Copy-Item $src.FullName "$BIN\bitcoind.exe" -Force; Copy-Item (Join-Path $src.DirectoryName "bitcoin-cli.exe") "$BIN\bitcoin-cli.exe" -Force
+  Ok ((& "$BIN\bitcoind.exe" --version | Select-Object -First 1))
+  return $true
+}
+
 function Check-PoolLink($poolHost, $poolPort, $logMark, $rounds) {   # waits up to $rounds x 2 s for the gateway's pool link, then says what it saw
   # Did the pool accept us? The gateway authenticates the pool by its public key on every connection, so a wrong host,
   # port or key shows up here as a link that never comes up. Checked for every pool, typed by hand or not.
@@ -206,14 +228,33 @@ $drive = (Get-Item ($ROOT.Substring(0, 2) + "\")).PSDrive
 $freeGB = [int]((Get-PSDrive $ROOT.Substring(0, 1)).Free / 1GB)
 $cpus = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 Say "Machine: $cpus CPU, $memMB MB RAM, $freeGB GB free on $($ROOT.Substring(0,2))"
-if ($UpdateGateway) {
-  # Gateway update only: the build this release names, a restart of its task, the handshake check. Nothing else is read or written.
-  if (-not (Test-Path $GW_CONF) -or -not (TaskExists "XorDatum Gateway")) { Die "no gateway from this script found here (no $GW_CONF or no 'XorDatum Gateway' task); run the script without -UpdateGateway to install" }
+if ($UpdateGateway -or $Update) {
+  # Update only: the builds this release names (node too with -Update), a restart of what changed, the handshake check. No questions.
+  if (-not (Test-Path $GW_CONF) -or -not (TaskExists "XorDatum Gateway")) { Die "no gateway from this script found here (no $GW_CONF or no 'XorDatum Gateway' task); run the script without the update switch to install" }
+  $ownNode = (Test-Path $NODE_CONF) -and (TaskExists "XorDatum Node") -and -not (Test-Path "$ROOT\existing-node.txt")
   $cur = ""; try { $cur = "" + (& "$BIN\ratum-gateway.exe" --version 2>&1 | Select-Object -First 1) } catch {}
-  Say ""; Say "Updating the gateway to ratum-gateway $RATUM_VER (current: $cur)"
   New-Item -ItemType Directory -Force -Path $TMP | Out-Null
+  $nodeNew = $false
+  if ($Update) {
+    if ($ownNode) {
+      $curK = ""; try { $curK = "" + (& "$BIN\bitcoind.exe" --version 2>&1 | Select-Object -First 1) } catch {}
+      Say ""; Say "Updating node and gateway: Bitcoin Knots v$KNOTS_VER (current: $curK), ratum-gateway $RATUM_VER (current: $cur)"
+      $nodeNew = Install-Knots
+    } else { Say ""; Warn "the node here is your own Bitcoin Knots (wallet program), not one this script installed: update it yourself with the Knots installer (v$KNOTS_VER). Updating the gateway only." }
+  } else { Say ""; Say "Updating the gateway to ratum-gateway $RATUM_VER (current: $cur)" }
   $changed = Install-Gateway; Remove-Item "$TMP\*" -Recurse -Force -ErrorAction SilentlyContinue
-  if (-not $changed) { Say "  nothing to do: the gateway is already on this release, left running"; exit 0 }
+  if ($nodeNew) {
+    Say "restarting the node onto Bitcoin Knots v$KNOTS_VER..."
+    StopAll; Start-ScheduledTask -TaskName "XorDatum Node"
+    $up = $false; for ($i = 0; $i -lt 150; $i++) { try { if (NodeCli getblockcount) { $up = $true; break } } catch {}; Start-Sleep 2 }
+    if ($up) { Ok "node restarted on v$KNOTS_VER" } else { Warn "the node has not answered yet after its update - check in a few minutes with datum-status" }
+    Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 3
+  }
+  if (-not $changed) {
+    Say "  gateway: already on this release, left running"
+    if (-not $nodeNew) { Say "  nothing to do: everything is already on this release"; exit 0 }
+    Say ""; if (Test-Path "$ROOT\datum-status.ps1") { & powershell -ExecutionPolicy Bypass -File "$ROOT\datum-status.ps1" }; exit 0
+  }
   StopGateway
   $logMark = if (Test-Path "$LOGS\gateway.log") { (Get-Item "$LOGS\gateway.log").Length } else { 0 }
   Start-ScheduledTask -TaskName "XorDatum Gateway"; Start-Sleep 3
@@ -398,20 +439,8 @@ if ($EXT) {
   Set-Content -Path $EXT_MARK -Value $EXT_DIR -Encoding ASCII
 } else { StopAll; Remove-Item $EXT_MARK -Force -ErrorAction SilentlyContinue }
 
-# Knots
-$curKnots = ""; if (Test-Path "$BIN\bitcoind.exe") { try { $curKnots = (& "$BIN\bitcoind.exe" --version | Select-Object -First 1) } catch {} }
-if ($EXT) { }
-elseif ($curKnots -match [regex]::Escape("v$KNOTS_VER")) { Ok "Bitcoin Knots v$KNOTS_VER already installed" }
-else {
-  Say "downloading Bitcoin Knots v$KNOTS_VER (~50 MB)..."
-  $kzip = "bitcoin-$KNOTS_VER-win64-pgpverifiable.zip"; $kurl = "https://github.com/bitcoinknots/bitcoin/releases/download/v$KNOTS_VER"
-  Download "$kurl/$kzip" "$TMP\$kzip" $KNOTS_SHA256
-  if ((Get-Sha256 "$TMP\$kzip") -ne $KNOTS_SHA256) { Remove-Item "$TMP\$kzip" -Force; Die "checksum MISMATCH on $kzip - not installing it" }
-  Expand-Archive -Path "$TMP\$kzip" -DestinationPath "$TMP\knots" -Force
-  $src = Get-ChildItem "$TMP\knots" -Recurse -Filter bitcoind.exe | Select-Object -First 1
-  Copy-Item $src.FullName "$BIN\bitcoind.exe" -Force; Copy-Item (Join-Path $src.DirectoryName "bitcoin-cli.exe") "$BIN\bitcoin-cli.exe" -Force
-  Ok ((& "$BIN\bitcoind.exe" --version | Select-Object -First 1))
-}
+# Knots (not in the existing-wallet mode: that node is the owner's)
+$knotsNew = $false; if (-not $EXT) { $knotsNew = Install-Knots }
 [void](Install-Gateway)
 
 # node config (chain data untouched). This file is rewritten on every run; the owner's own relay / block-building policy
