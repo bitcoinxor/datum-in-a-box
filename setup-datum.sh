@@ -34,7 +34,7 @@ NONINT=0; WANT_SNAP=0
 UPDATE_GW=0; UPDATE_ALL=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; --update-gateway) UPDATE_GW=1;; --update) UPDATE_ALL=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.9.0"
+SETUP_VERSION="v1.9.1"
 KNOTS_VER="${DATUM_KNOTS_VER:-29.4.3.knots20260508}"   # the node release this script installs; DATUM_KNOTS_VER=<version> overrides it (see README: at your own risk)
 RATUM_VER="0.1.66-xor.1"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
@@ -378,23 +378,49 @@ elif [ "$NONINT" -eq 0 ]; then
 fi
 IS_XOR=0; [ "$POOL_PUBKEY" = "$XOR_PUBKEY" ] && IS_XOR=1
 
-SNAP=0; SNAP_H=""; SNAP_HASH=""; SNAP_SHA=""; SNAP_FILE=""; SNAP_SIZE=0
+SNAP=0; SNAP_H=""; SNAP_HASH=""; SNAP_SHA=""; SNAP_FILE=""; SNAP_SIZE=0; SNAP_STREAM=0; SNAP_GB=0
 if latest=$(curl -fsS --max-time 15 "$SNAPSHOT_URL" 2>/dev/null); then
   read -r SNAP_FILE SNAP_H SNAP_HASH SNAP_SHA SNAP_SIZE <<<"$(python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["file"],d["height"],d["block_hash"],d["sha256"],d["size_bytes"])' <<<"$latest" 2>/dev/null || true)"
 fi
-if [ -n "$SNAP_FILE" ]; then
+# Without the snapshot the node syncs from the start: 1-3 days with NO work for the miners. Nobody should discover that from one
+# quiet line (a miner did, 2026-11-07: a 29 GB VPS, the old 35 GB rule skipped the snapshot and he thought the install was broken).
+no_snapshot_banner() {  # $1 = why, $2 = what to do
+  say ""
+  printf '%s' "${red}${bold}"
+  say "  ##############################################################################"
+  say "  #   NO CHAIN SNAPSHOT: THE NODE WILL SYNC FROM THE START, 1 TO 3 DAYS        #"
+  say "  #   YOUR MINERS GET NO WORK FROM THIS GATEWAY UNTIL THAT SYNC IS FINISHED.   #"
+  say "  ##############################################################################"
+  printf '%s' "$off"
+  say "  Why:   $1"
+  say "  Fix:   $2"
+  say ""
+  if [ "$NONINT" -eq 0 ]; then printf '  Press Enter to continue without the snapshot, or Ctrl-C to stop here: ' >&2; readline _ || true; say ""; fi
+}
+if [ -z "$SNAP_FILE" ]; then
+  no_snapshot_banner "could not read the snapshot index at $SNAPSHOT_URL from this machine" "check that this machine reaches snapshot.xorpool.com (curl -I $SNAPSHOT_URL) and run the script again"
+else
   have_h=0; [ -d "$NODE_DIR/chainstate" ] && have_h=$(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getblockcount 2>/dev/null || echo 0)
+  # Room: the download is SNAP_GB, unpacked it is ~1.25x that (13 GB for the 11.5 GB file of Nov 2026). An existing node's chain
+  # data is deleted before the unpack, so it counts as free. With room for download + unpack side by side the file is fetched
+  # first (resumable); with less, it is unpacked straight from the download (no temp file, a broken download starts over).
+  OLD_GB=0; [ -d "$NODE_DIR/blocks" ] && OLD_GB=$(du -sBG "$NODE_DIR/blocks" "$NODE_DIR/chainstate" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+  ROOM_GB=$((DISK_GB + OLD_GB))
+  SNAP_GB=$((SNAP_SIZE/1073741824 + 1)); NEED_STREAM_GB=$((SNAP_GB*5/4 + 2)); NEED_FILE_GB=$((SNAP_GB + NEED_STREAM_GB + 2))
   if [ "${have_h:-0}" -ge "$SNAP_H" ]; then
     say ""; say "Your node is already past the published snapshot (height $have_h); no snapshot needed."
-  elif [ "$DISK_GB" -lt 35 ]; then
-    say ""; warn "the chain snapshot needs ~35 GB free during install (have ${DISK_GB} GB) - skipping it; the node will sync from scratch (1-3 days)"
+  elif [ "$ROOM_GB" -lt "$NEED_STREAM_GB" ]; then
+    no_snapshot_banner "only ${ROOM_GB} GB free for the node; the unpacked snapshot needs about ${NEED_STREAM_GB} GB" "give this machine more disk (or use a bigger server) and run the script again - the snapshot then takes minutes"
   else
+    [ "$ROOM_GB" -lt "$NEED_FILE_GB" ] && SNAP_STREAM=1
     say ""
-    say "4) Skip the initial sync? A snapshot of the pruned chain at height $SNAP_H ($((SNAP_SIZE/1073741824)) GB download) is available."
+    say "4) Skip the initial sync? A snapshot of the pruned chain at height $SNAP_H ($SNAP_GB GB download) is available."
     say "   With it the node starts at the tip in minutes instead of 1-3 days. You trust this copy of history up to"
     say "   height $SNAP_H (like any bootstrap); every block after it is verified by your own node."
+    [ "$SNAP_STREAM" -eq 1 ] && say "   (${ROOM_GB} GB free: it is unpacked straight from the download, no temp copy; if the download breaks, re-run and it starts over)"
     if [ "$NONINT" -eq 1 ]; then SNAP=$WANT_SNAP; [ "$SNAP" -eq 1 ] && ok "snapshot: height $SNAP_H (requested)"
     elif confirm_default_yes "   Download the snapshot?"; then SNAP=1; ok "snapshot: height $SNAP_H"; else say "   ok - syncing from scratch"; fi
+    [ "$SNAP" -eq 1 ] || no_snapshot_banner "you answered no to the snapshot" "run the script again and answer Y to question 4"
   fi
 fi
 
@@ -425,7 +451,7 @@ say "  Block tag        Bitcoin Xor / $NAME"
 if [ "$IS_XOR" -eq 1 ]; then say "  Pool             Bitcoin Xor at $POOL_HOST:$POOL_PORT  (1% fee, you build the templates)"
 else say "  Pool             $POOL_HOST:$POOL_PORT  key ${POOL_PUBKEY:0:8}...${POOL_PUBKEY: -8}  (that pool's own fee and rules apply)"; fi
 say "  Node             $NODE_DIR  (pruned, ~14 GB, RPC local-only)"
-[ "$SNAP" -eq 1 ] && say "  Snapshot         $SNAP_FILE -> node starts at height $SNAP_H"
+[ "$SNAP" -eq 1 ] && say "  Snapshot         $SNAP_FILE -> node starts at height $SNAP_H$( [ "$SNAP_STREAM" -eq 1 ] && echo "  (unpacked straight from the download)" )"
 [ "$DESK" -eq 1 ] && say "  Xor Desk         http://$( [ "$DESK_LISTEN" = "0.0.0.0" ] && echo "${MYIP4:-this-machine}" || echo 127.0.0.1 ):8090  (password shown at the end)"
 [ "$NEED_SWAP" -eq 1 ] && say "  Swap             add a 2 GB /swapfile"
 say ""
@@ -639,8 +665,25 @@ sleep 4
 systemctl is-active --quiet knotsd || die "the node did not start - see: journalctl -u knotsd -n 50"
 systemctl is-active --quiet ratum-gateway || die "the gateway did not start - see: journalctl -u ratum-gateway -n 50"
 
-if [ "$SNAP" -eq 1 ]; then
-  say ""; say "${bold}Downloading the chain snapshot${off} ($((SNAP_SIZE/1073741824)) GB) - this is the long part, a few minutes on a good link..."
+if [ "$SNAP" -eq 1 ] && [ "$SNAP_STREAM" -eq 1 ]; then
+  say ""; say "${bold}Downloading and unpacking the chain snapshot${off} ($SNAP_GB GB, straight into the node, no temp copy) - this is the long part, a few minutes on a good link..."
+  systemctl stop knotsd
+  rm -rf "$NODE_DIR/blocks" "$NODE_DIR/chainstate"      # only the chain data; the config and everything else stay
+  SHA_FILE=$(mktemp)
+  set +e
+  curl -fL -# --retry 5 --retry-delay 5 "https://snapshot.xorpool.com/$SNAP_FILE" | tee >(sha256sum | cut -d' ' -f1 > "$SHA_FILE") | unzstd | tar -C "$NODE_DIR" -x
+  rcs=("${PIPESTATUS[@]}")
+  set -e
+  sleep 2; got_sha=$(cat "$SHA_FILE" 2>/dev/null || true); rm -f "$SHA_FILE"
+  if [ "${rcs[0]}" -ne 0 ] || [ "${rcs[2]}" -ne 0 ] || [ "${rcs[3]}" -ne 0 ] || [ "$got_sha" != "$SNAP_SHA" ]; then
+    rm -rf "$NODE_DIR/blocks" "$NODE_DIR/chainstate"; systemctl start knotsd
+    die "snapshot download/unpack failed or checksum MISMATCH (curl ${rcs[0]}, unzstd ${rcs[2]}, tar ${rcs[3]}, sha ${got_sha:-none}) - nothing of it kept; the node is syncing from the start meanwhile. Run the script again to retry the snapshot."
+  fi
+  ok "checksum matches"
+  chown -R "$SVC_USER:$SVC_USER" "$NODE_DIR/blocks" "$NODE_DIR/chainstate"
+  systemctl start knotsd
+elif [ "$SNAP" -eq 1 ]; then
+  say ""; say "${bold}Downloading the chain snapshot${off} ($SNAP_GB GB) - this is the long part, a few minutes on a good link..."
   SNAP_DIR=/var/tmp/xorpool-snapshot; mkdir -p "$SNAP_DIR"
   curl -fL -# --retry 5 --retry-delay 5 -C - -o "$SNAP_DIR/$SNAP_FILE" "https://snapshot.xorpool.com/$SNAP_FILE" || die "snapshot download failed - run the script again to resume it"
   say "verifying checksum..."
@@ -652,6 +695,8 @@ if [ "$SNAP" -eq 1 ]; then
   chown -R "$SVC_USER:$SVC_USER" "$NODE_DIR/blocks" "$NODE_DIR/chainstate"
   rm -f "$SNAP_DIR/$SNAP_FILE"
   systemctl start knotsd
+fi
+if [ "$SNAP" -eq 1 ]; then
   for i in $(seq 1 90); do got=$(sudo -u "$SVC_USER" /usr/local/bin/bitcoin-cli -datadir="$NODE_DIR" getblockhash "$SNAP_H" 2>/dev/null) && break; sleep 2; done
   if [ "${got:-}" = "$SNAP_HASH" ]; then ok "node started from the snapshot at height $SNAP_H; block hash verified"
   else warn "could not verify block $SNAP_H against the published hash yet (node still starting?) - check later with: datum-status"; fi
@@ -670,8 +715,9 @@ if [ "$SNAP" -eq 1 ]; then
   say "  The node started from the snapshot and is catching up the last few blocks - your ASICs get work within minutes."
   say ""
 elif [ "$UPDATE" -eq 0 ]; then
-  say "  The node is now syncing the chain from the start - ${bold}1 to 3 days${off} on a small VPS. Your ASICs will get"
-  say "  work automatically the moment it reaches the tip; until then the gateway waits. Leave it running."
+  say "  ${red}${bold}NO SNAPSHOT: the node is syncing the chain from the start, 1 to 3 days on a small VPS.${off}"
+  say "  ${red}${bold}Your ASICs get NO WORK from this gateway until the node reaches the tip.${off} Then the gateway hands out"
+  say "  work by itself; leave it running and check with: datum-status"
   say "  (Re-run this script and answer Y to the snapshot question to skip most of the wait.)"
   say ""
 fi

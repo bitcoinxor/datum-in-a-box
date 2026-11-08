@@ -29,7 +29,7 @@ validates its shape, and at the end it tells you plainly whether the pool answer
 or the handshake failed. The Windows and macOS installers ask the same.
 
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.6.0/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -42,13 +42,13 @@ One line brings node and gateway to the versions this release pins, with no ques
 touched and only what changed is restarted:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.0/setup-datum.sh | sudo bash -s -- --update
+curl -fsSL https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.sh | sudo bash -s -- --update
 ```
 
 Windows, in an administrator PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.0/setup-datum.ps1 -OutFile $env:TEMP\setup-datum.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-datum.ps1 -Update
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.ps1 -OutFile $env:TEMP\setup-datum.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-datum.ps1 -Update
 ```
 
 `--update-gateway` / `-UpdateGateway` do the same for the gateway alone. If GitHub is unreachable, the same files are at
@@ -90,7 +90,7 @@ if you want it (on Windows 10, whose built-in `tar` cannot read zstd, the instal
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.0/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -127,7 +127,7 @@ with macOS). The chain snapshot works if your `tar` can read zstd (recent macOS)
 is installed; otherwise the node syncs from scratch. Open Terminal and paste:
 
 ```bash
-curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.6.0/setup-datum-macos.sh
+curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum-macos.sh
 sudo bash setup-datum-macos.sh
 ```
 

@@ -22,7 +22,7 @@ param([string]$ExistingNode = "", [switch]$UpdateGateway, [switch]$Update)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.9.0"
+$SETUP_VERSION = "v1.9.1"
 $KNOTS_VER  = if ($env:DATUM_KNOTS_VER) { $env:DATUM_KNOTS_VER } else { "29.4.3.knots20260508" }   # DATUM_KNOTS_VER overrides the node release (see README: at your own risk)
 $RATUM_VER  = "0.1.66-xor.1"
 # The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
@@ -66,6 +66,16 @@ function Ask($prompt, $default) {
   }
 }
 function ConfirmYes($prompt) { $a = Read-Host "$prompt [Y/n]"; return (-not ($a -match '^(n|no)$')) }
+# Without the snapshot the node syncs from the start: 1-3 days with NO work for the miners. Loud on purpose.
+function NoSnapshotBanner($why, $fix) {
+  Say ""
+  Write-Host "  ##############################################################################" -ForegroundColor Red
+  Write-Host "  #   NO CHAIN SNAPSHOT: THE NODE WILL SYNC FROM THE START, 1 TO 3 DAYS        #" -ForegroundColor Red
+  Write-Host "  #   YOUR MINERS GET NO WORK FROM THIS GATEWAY UNTIL THAT SYNC IS FINISHED.   #" -ForegroundColor Red
+  Write-Host "  ##############################################################################" -ForegroundColor Red
+  Say "  Why:   $why"; Say "  Fix:   $fix"; Say ""
+  Read-Host "  Press Enter to continue without the snapshot, or Ctrl-C to stop here" | Out-Null; Say ""
+}
 function ConfirmNo($prompt)  { $a = Read-Host "$prompt [y/N]"; return ($a -match '^(y|yes)$') }
 
 # ---------------------------------------------------------------- address validation (bech32 / bech32m / base58check)
@@ -402,15 +412,22 @@ try { $snap = Invoke-RestMethod -Uri $SNAPSHOT_URL -TimeoutSec 15 -Headers @{ "U
 if ($snap -and $snap.file -and -not $EXT) {
   $haveH = 0
   if ((Test-Path "$NODE\chainstate") -and (Test-Path "$BIN\bitcoin-cli.exe")) { try { $haveH = [int](NodeCli getblockcount) } catch { $haveH = 0 } }
+  # Room: the download is snapGB, unpacked ~1.25x that (13 GB for the 11.5 GB file of Nov 2026), both on disk at once here; an
+  # existing node's chain data is deleted before the unpack, so it counts as free. (The old fixed "35 GB" rule skipped the
+  # snapshot on a 29 GB machine with one quiet line, 2026-11-07, and the miner thought the install was broken.)
+  $oldGB = 0; if (Test-Path "$NODE\blocks") { try { $oldGB = [int]((Get-ChildItem "$NODE\blocks", "$NODE\chainstate" -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1GB) } catch {} }
+  $roomGB = $freeGB + $oldGB
+  $snapGB = [int][math]::Floor($snap.size_bytes / 1GB) + 1; $needGB = $snapGB + [int]($snapGB * 5 / 4) + 4
   if ($haveH -ge [int]$snap.height) { Say ""; Say "Your node is already past the published snapshot (height $haveH); no snapshot needed." }
-  elseif ($freeGB -lt 35) { Say ""; Warn "the chain snapshot needs ~35 GB free during install (have $freeGB GB) - skipping it; the node will sync from scratch (1-3 days)" }
+  elseif ($roomGB -lt $needGB) { NoSnapshotBanner "only $roomGB GB free on $($ROOT.Substring(0,2)); the snapshot needs about $needGB GB while it is unpacked" "free up disk space (or use another drive) and run the script again - the snapshot then takes minutes" }
   else {
-    Say ""; Say "4) Skip the initial sync? A snapshot of the pruned chain at height $($snap.height) ($([int]($snap.size_bytes/1GB)) GB download) is available."
+    Say ""; Say "4) Skip the initial sync? A snapshot of the pruned chain at height $($snap.height) ($snapGB GB download) is available."
     Say "   With it the node starts at the tip in minutes instead of 1-3 days. You trust this copy of history up to"
     Say "   height $($snap.height) (like any bootstrap); every block after it is verified by your own node."
-    if (ConfirmYes "   Download the snapshot?") { $doSnapshot = $true; Ok "snapshot: height $($snap.height)" } else { Say "   ok - syncing from scratch" }
+    if (ConfirmYes "   Download the snapshot?") { $doSnapshot = $true; Ok "snapshot: height $($snap.height)" } else { Say "   ok - syncing from scratch"; NoSnapshotBanner "you answered no to the snapshot" "run the script again and answer Y to question 4" }
   }
 }
+elseif (-not $EXT) { NoSnapshotBanner "could not read the snapshot index at $SNAPSHOT_URL from this PC" "check that this PC reaches snapshot.xorpool.com and run the script again" }
 
 $RPC_PASS = if ($oldPass) { $oldPass } else { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 40 | ForEach-Object { [char]$_ }) }
 $API_PASS = if ($oldApi) { $oldApi } else { -join ((48..57 + 97..102) | Get-Random -Count 32 | ForEach-Object { [char]$_ }) }
@@ -677,7 +694,7 @@ Say "                         worker:  anything.rig1   password:  x"; Say ""
 if ($EXT) { Say "  Your Bitcoin Knots is the node: keep it running (and the PC awake, logged in) - the gateway waits whenever it is closed."; Say "  Its config: $EXT_DIR\bitcoin.conf (a backup of the old one sits next to it)." }
 elseif ($doSnapshot) { Say "  The node started from the snapshot and is catching up the last few blocks - your ASICs get work within minutes." }
 elseif ($hadChain) { Say "  The node restarted with its existing chain data and is catching up whatever it missed - your ASICs get work within minutes." }
-else { Say "  The node is now syncing the chain from the start - 1 to 3 days on a small PC. Your ASICs get work automatically"; Say "  the moment it reaches the tip; until then the gateway waits. Leave the PC on (and not sleeping)." }
+else { Write-Host "  NO SNAPSHOT: the node is syncing the chain from the start, 1 to 3 days on a small PC." -ForegroundColor Red; Write-Host "  Your ASICs get NO WORK from this gateway until the node reaches the tip." -ForegroundColor Red; Say "  Then the gateway hands out work by itself; leave the PC on (and not sleeping). Re-run with Y to the snapshot to skip most of the wait." }
 Say ""; Say "  Check on it any time (PowerShell):  powershell -ExecutionPolicy Bypass -File $ROOT\datum-status.ps1"
 if (Test-Path "$ROOT\datum-pool.ps1") { Say "  Change the pool any time:           powershell -ExecutionPolicy Bypass -File $ROOT\datum-pool.ps1   (as administrator)" }
 if ($isXor) { Say "  Your stats once shares flow:        $XOR_URL/miner/$ADDR" } elseif ($POOL_URL) { Say "  Your stats are on your pool's own site:  $POOL_URL" }
