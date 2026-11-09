@@ -29,7 +29,7 @@ validates its shape, and at the end it tells you plainly whether the pool answer
 or the handshake failed. The Windows and macOS installers ask the same.
 
 ```sh
-curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.sh
+curl -fsSLo setup-datum.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.2/setup-datum.sh
 sudo bash setup-datum.sh
 ```
 
@@ -42,13 +42,13 @@ One line brings node and gateway to the versions this release pins, with no ques
 touched and only what changed is restarted:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.sh | sudo bash -s -- --update
+curl -fsSL https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.2/setup-datum.sh | sudo bash -s -- --update
 ```
 
 Windows, in an administrator PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.ps1 -OutFile $env:TEMP\setup-datum.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-datum.ps1 -Update
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.2/setup-datum.ps1 -OutFile $env:TEMP\setup-datum.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-datum.ps1 -Update
 ```
 
 `--update-gateway` / `-UpdateGateway` do the same for the gateway alone. If GitHub is unreachable, the same files are at
@@ -90,7 +90,7 @@ if you want it (on Windows 10, whose built-in `tar` cannot read zstd, the instal
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd $env:USERPROFILE\Downloads
-Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum.ps1 -OutFile setup-datum.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.2/setup-datum.ps1 -OutFile setup-datum.ps1
 powershell -ExecutionPolicy Bypass -File .\setup-datum.ps1
 ```
 
@@ -127,7 +127,7 @@ with macOS). The chain snapshot works if your `tar` can read zstd (recent macOS)
 is installed; otherwise the node syncs from scratch. Open Terminal and paste:
 
 ```bash
-curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.1/setup-datum-macos.sh
+curl -fsSLo setup-datum-macos.sh https://raw.githubusercontent.com/bitcoinxor/datum-in-a-box/v1.9.2/setup-datum-macos.sh
 sudo bash setup-datum-macos.sh
 ```
 
@@ -256,14 +256,16 @@ sudo -u knots bitcoin-cli -datadir=/var/lib/knots getblockhash $H; python3 -c 'i
 
 [ratum-gateway](https://github.com/iohzrd/ratum) is an open-source (AGPL) DATUM gateway written
 for this chain: it builds templates from your node and speaks the 164-byte v2 header to BLAKE2b
-hardware. The installers use [our build of it](https://github.com/bitcoinxor/xor-ratum/releases/tag/v0.1.66-xor.1):
-upstream 0.1.66 plus one change, a reply to `mining.extranonce.subscribe`, which rental proxies such as
-MiningRigRentals send and treat as a dead pool when it is refused. Prebuilt static binaries with checksums are on
+hardware. The installers use [our build of it](https://github.com/bitcoinxor/xor-ratum/releases/tag/v0.1.66-xor.2):
+upstream 0.1.66 plus two changes: a reply to `mining.extranonce.subscribe`, which rental proxies such as
+MiningRigRentals send and treat as a dead pool when it is refused, and the gateway fee (`datum.gateway_fee_bps`,
+`datum.gateway_fee_address`), which upstream removed in September: a shared gateway can keep a cut of its
+miners' work. Prebuilt static binaries with checksums are on
 that release page.
 
 ```sh
 cd /tmp
-R=0.1.66-xor.1; A=$(uname -m | sed 's/x86_64/x86_64-linux-musl/; s/aarch64/aarch64-linux-musl/')
+R=0.1.66-xor.2; A=$(uname -m | sed 's/x86_64/x86_64-linux-musl/; s/aarch64/aarch64-linux-musl/')
 curl -LO https://github.com/bitcoinxor/xor-ratum/releases/download/v$R/ratum-gateway-$R-$A.tar.gz
 curl -LO https://github.com/bitcoinxor/xor-ratum/releases/download/v$R/ratum-gateway-$R-$A.tar.gz.sha256
 sha256sum -c ratum-gateway-$R-$A.tar.gz.sha256      # must print: OK

@@ -5,7 +5,7 @@
 #  Installs, on this machine, everything needed to mine on the Bitcoin BLAKE2b chain with
 #  YOUR OWN block templates:
 #     * Bitcoin Knots (BLAKE2b fork) v29.4.3 - pruned full node, RPC local-only
-#     * ratum-gateway 0.1.66-xor.1     - DATUM gateway your ASICs connect to on :23334
+#     * ratum-gateway 0.1.66-xor.2     - DATUM gateway your ASICs connect to on :23334
 #     * Xor Desk (optional)             - a local web dashboard for this machine, sends nothing anywhere
 #  and points the gateway at a DATUM pool for the payout split: Bitcoin Xor (xorpool.com, 1% fee) by default,
 #  or any other DATUM pool whose host, port and public key you enter.
@@ -34,9 +34,9 @@ NONINT=0; WANT_SNAP=0
 UPDATE_GW=0; UPDATE_ALL=0
 for a in "$@"; do case "$a" in --noninteractive) NONINT=1;; --snapshot) WANT_SNAP=1;; --update-gateway) UPDATE_GW=1;; --update) UPDATE_ALL=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 
-SETUP_VERSION="v1.9.1"
+SETUP_VERSION="v1.9.2"
 KNOTS_VER="${DATUM_KNOTS_VER:-29.4.3.knots20260508}"   # the node release this script installs; DATUM_KNOTS_VER=<version> overrides it (see README: at your own risk)
-RATUM_VER="0.1.66-xor.1"
+RATUM_VER="0.1.66-xor.2"
 # The default pool. Any other DATUM pool works too (question 3): a pool is identified by its PUBLIC KEY, which the
 # gateway checks on every connection; host and port only say where to reach it.
 XOR_HOST="datum.xorpool.com"

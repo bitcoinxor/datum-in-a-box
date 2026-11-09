@@ -4,7 +4,7 @@
   ---------------------------------------------------------------------------
   Installs, on this PC, everything needed to mine on the Bitcoin BLAKE2b chain with YOUR OWN block templates:
      * Bitcoin Knots (BLAKE2b fork) v29.4.3 - pruned full node, RPC local-only
-     * ratum-gateway 0.1.66-xor.1     - the DATUM gateway your ASICs connect to on port 23334
+     * ratum-gateway 0.1.66-xor.2     - the DATUM gateway your ASICs connect to on port 23334
   and points the gateway at the Bitcoin Xor DATUM pool for the payout split (1% fee).
   Both run as scheduled tasks that start with Windows (no login needed). Nothing is sent anywhere.
   Safe to re-run: an existing install is updated in place; chain data is kept.
@@ -22,14 +22,14 @@ param([string]$ExistingNode = "", [switch]$UpdateGateway, [switch]$Update)
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SETUP_VERSION = "v1.9.1"
+$SETUP_VERSION = "v1.9.2"
 $KNOTS_VER  = if ($env:DATUM_KNOTS_VER) { $env:DATUM_KNOTS_VER } else { "29.4.3.knots20260508" }   # DATUM_KNOTS_VER overrides the node release (see README: at your own risk)
-$RATUM_VER  = "0.1.66-xor.1"
+$RATUM_VER  = "0.1.66-xor.2"
 # The checksums of the two official Windows builds, taken from the projects' own SHA256SUMS / .sha256 files on GitHub and
 # pinned here, so a download from anywhere (GitHub, or our mirror when GitHub is unreachable) is checked against the
 # authors' values, not against whatever sits next to the file. Update both when bumping a version.
 $KNOTS_SHA256 = if ($env:DATUM_KNOTS_VER) { "" } else { "3035ee70d108f6ff7fa76b99df9e261181da34a471b30946cf5a1e5e504ec709" }   # bitcoin-29.4.3.knots20260508-win64-pgpverifiable.zip; an overridden version is checked against its release's SHA256SUMS instead
-$RATUM_SHA256 = "c5d2197439dcaf095a8f40b94d8bd2e24a3038888821dd2b7882109c0827a628"   # ratum-gateway-0.1.66-xor.1-x86_64-windows.zip
+$RATUM_SHA256 = "cee46d0589654bfcf09541495474e5d895c36f2bc6c2f7fb8f1d6d169f7b07b7"   # ratum-gateway-0.1.66-xor.2-x86_64-windows.zip
 $MIRROR = "https://snapshot.xorpool.com/mirror"   # same files, for networks where GitHub's release downloads fail (China)
 $VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"   # the gateway needs Microsoft's VC++ runtime (vcruntime140.dll); a bare Windows 10 lacks it
 # Windows 10's built-in tar cannot read the zstd snapshot (Windows 11's can). When it cannot, this zstd build (facebook/zstd's
